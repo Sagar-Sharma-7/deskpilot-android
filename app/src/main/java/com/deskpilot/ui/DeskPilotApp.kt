@@ -197,6 +197,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 }
 
 @Composable private fun SettingsScreen(model: DeskPilotViewModel, settings: DeskSettings, back: () -> Unit) {
+    var showAdvancedProfileWarning by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         TextButton(onClick = back) { Text("← Trackpad") }; Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
@@ -213,7 +214,30 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         SettingToggle("Keep display awake", "Required while using the interactive trackpad", settings.keepAwake, model::setKeepAwake)
         SettingToggle("Haptics", "Clicks, drags, and scrolling", settings.haptics, model::setHaptics)
         SettingToggle("Scroll haptics", "A subtle tick while scrolling", settings.scrollHaptics, model::setScrollHaptics)
+        SettingsHeader("Advanced laptop gestures")
+        SettingToggle(
+            "Advanced laptop gestures",
+            "Enables horizontal scrolling and pinch-to-zoom; changing it requires re-pairing Windows.",
+            settings.advancedLaptopGestures
+        ) { showAdvancedProfileWarning = true }
+        if (settings.advancedLaptopGestures) {
+            SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
+        }
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    }
+    if (showAdvancedProfileWarning) {
+        val enabled = !settings.advancedLaptopGestures
+        AlertDialog(
+            onDismissRequest = { showAdvancedProfileWarning = false },
+            title = { Text(if (enabled) "Enable advanced gestures?" else "Use simple trackpad mode?") },
+            text = { Text("Windows must be unpaired and paired again after this change because it installs a different Bluetooth HID profile. Your reliable basic trackpad mode remains available when this option is off.") },
+            confirmButton = {
+                TextButton(onClick = { model.setAdvancedLaptopGestures(enabled); showAdvancedProfileWarning = false }) {
+                    Text(if (enabled) "Enable and re-pair" else "Use simple mode")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showAdvancedProfileWarning = false }) { Text("Cancel") } }
+        )
     }
 }
 

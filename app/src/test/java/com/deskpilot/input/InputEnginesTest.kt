@@ -15,6 +15,10 @@ class InputEnginesTest {
         assertArrayEquals(byteArrayOf(0x07, 12, (-9).toByte()), HidReportEncoder.bootMouse(0x1f, 12, -9))
     }
 
+    @Test fun `advanced mouse packet includes horizontal pan`() {
+        assertArrayEquals(byteArrayOf(0x03, 12, (-9).toByte(), 2, (-4).toByte()), HidReportEncoder.advancedMouse(3, 12, -9, 2, -4))
+    }
+
     @Test fun `mouse reports clamp HID relative ranges`() {
         assertArrayEquals(byteArrayOf(1, 127, -127, 127), HidReportEncoder.mouse(1, 500, -900, 500))
     }
@@ -88,6 +92,15 @@ class InputEnginesTest {
         assertTrue(sink.scrolls.isNotEmpty())
         assertTrue(sink.pinches.isEmpty())
         assertTrue(sink.swipes.isEmpty())
+    }
+
+    @Test fun `large two finger separation produces pinch instead of scroll`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 50f, 100f), 0)
+        engine.down(TouchPoint(2, 150f, 100f), 1)
+        engine.move(listOf(TouchPoint(1, 10f, 100f), TouchPoint(2, 190f, 100f)), 30)
+        assertTrue(sink.pinches.isNotEmpty())
+        assertTrue(sink.scrolls.isEmpty())
     }
 }
 

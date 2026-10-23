@@ -26,6 +26,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     private val _hapticEvents = MutableSharedFlow<HapticCue>(extraBufferCapacity = 4)
     val hapticEvents = _hapticEvents.asSharedFlow()
     private var lastScrollHapticAt = 0L
+    private var pinchAccumulator = 0f
     private val actions = ActionRegistry(hid, ::togglePrecision, ::toggleDragLock)
     val gestures = GestureEngine(this)
 
@@ -52,6 +53,11 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     fun setExtremeDark(enabled: Boolean) = viewModelScope.launch { repository.setExtremeDark(enabled) }
     fun setHaptics(enabled: Boolean) = viewModelScope.launch { repository.setHaptics(enabled) }
     fun setScrollHaptics(enabled: Boolean) = viewModelScope.launch { repository.setScrollHaptics(enabled) }
+    fun setAdvancedLaptopGestures(enabled: Boolean) {
+        hid.setAdvancedProfile(enabled)
+        viewModelScope.launch { repository.setAdvancedLaptopGestures(enabled) }
+    }
+    fun setPinchToZoom(enabled: Boolean) = viewModelScope.launch { repository.setPinchToZoom(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
         hid.setButton(button, down)
@@ -83,7 +89,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
             _hapticEvents.tryEmit(HapticCue.SCROLL)
         }
     }
-    override fun finishMotion() = hid.discardPendingMotion()
+    override fun finishMotion() { pinchAccumulator = 0f; hid.discardPendingMotion() }
     override fun mouseDown() { hid.setButton(HidReportEncoder.LEFT, true); haptic(HapticCue.DRAG_START) }
     override fun mouseUp() = hid.setButton(HidReportEncoder.LEFT, false)
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) {
@@ -95,9 +101,26 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         when (fingers) { 3 -> when { dy < 0 -> execute(DeskAction.TASK_VIEW); dy > 0 -> execute(DeskAction.SHOW_DESKTOP); dx < 0 -> execute(DeskAction.SWITCH_APPS_BACK); dx > 0 -> execute(DeskAction.SWITCH_APPS) }
             4 -> execute(if (dx < 0) DeskAction.DESKTOP_RIGHT else DeskAction.DESKTOP_LEFT) }
     }
-    override fun pinch(scaleDelta: Float) { if (scaleDelta > 0f) hid.key(0x01, 0x2e) else hid.key(0x01, 0x2d) } // Ctrl +/-
+    override fun pinch(scaleDelta: Float) {
+        if (!settings.value.advancedLaptopGestures || !settings.value.pinchToZoom) return
+        pinchAccumulator += scaleDelta
+        while (pinchAccumulator >= PINCH_STEP) {
+            hid.key(HID_LEFT_CONTROL, HID_EQUAL)
+            pinchAccumulator -= PINCH_STEP
+        }
+        while (pinchAccumulator <= -PINCH_STEP) {
+            hid.key(HID_LEFT_CONTROL, HID_MINUS)
+            pinchAccumulator += PINCH_STEP
+        }
+    }
     override fun cancel() = releaseInputs()
     private fun haptic(cue: HapticCue) { if (settings.value.haptics) _hapticEvents.tryEmit(cue) }
 
-    private companion object { const val SCROLL_HAPTIC_INTERVAL_MS = 45L }
+    private companion object {
+        const val SCROLL_HAPTIC_INTERVAL_MS = 45L
+        const val PINCH_STEP = .16f
+        const val HID_LEFT_CONTROL = 0x01
+        const val HID_MINUS = 0x2D
+        const val HID_EQUAL = 0x2E
+    }
 }

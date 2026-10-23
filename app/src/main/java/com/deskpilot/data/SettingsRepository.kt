@@ -13,7 +13,8 @@ data class DeskSettings(
     val precisionMultiplier: Float = .42f, val scrollSpeed: Float = .055f, val naturalScroll: Boolean = true,
     val useVolumeShortcuts: Boolean = false, val volumeUp: DeskAction = DeskAction.COPY, val volumeDown: DeskAction = DeskAction.PASTE,
     val haptics: Boolean = true, val keepAwake: Boolean = true, val leftHanded: Boolean = false, val darkTheme: Boolean = false,
-    val extremeDark: Boolean = false, val minimalMode: Boolean = false, val scrollHaptics: Boolean = true
+    val extremeDark: Boolean = false, val minimalMode: Boolean = false, val scrollHaptics: Boolean = true,
+    val advancedLaptopGestures: Boolean = false, val pinchToZoom: Boolean = true
 )
 class SettingsRepository(private val context: Context) {
     private object Key {
@@ -25,13 +26,15 @@ class SettingsRepository(private val context: Context) {
         val dark = booleanPreferencesKey("dark_theme"); val extremeDark = booleanPreferencesKey("extreme_dark")
         val minimal = booleanPreferencesKey("minimal_mode")
         val scrollHaptics = booleanPreferencesKey("scroll_haptics")
+        val advancedGestures = booleanPreferencesKey("advanced_laptop_gestures")
+        val pinchZoom = booleanPreferencesKey("pinch_to_zoom")
     }
     val settings: Flow<DeskSettings> = context.dataStore.data.map { p ->
         DeskSettings(p[Key.speed] ?: 1.15f, p[Key.acceleration] ?: true, p[Key.accelerationStrength] ?: .32f, p[Key.precision] ?: .42f,
             p[Key.scroll] ?: .055f, p[Key.natural] ?: true, p[Key.volume] ?: false,
             action(p[Key.up], DeskAction.COPY), action(p[Key.down], DeskAction.PASTE), p[Key.haptics] ?: true, p[Key.awake] ?: true,
             p[Key.left] ?: false, p[Key.dark] ?: false, p[Key.extremeDark] ?: false, p[Key.minimal] ?: false,
-            p[Key.scrollHaptics] ?: true)
+            p[Key.scrollHaptics] ?: true, p[Key.advancedGestures] ?: false, p[Key.pinchZoom] ?: true)
     }
     suspend fun setVolumeEnabled(value: Boolean) { context.dataStore.edit { it[Key.volume] = value } }
     suspend fun setPointerSpeed(value: Float) { context.dataStore.edit { it[Key.speed] = value } }
@@ -42,6 +45,8 @@ class SettingsRepository(private val context: Context) {
     suspend fun setExtremeDark(value: Boolean) { context.dataStore.edit { it[Key.extremeDark] = value } }
     suspend fun setHaptics(value: Boolean) { context.dataStore.edit { it[Key.haptics] = value } }
     suspend fun setScrollHaptics(value: Boolean) { context.dataStore.edit { it[Key.scrollHaptics] = value } }
+    suspend fun setAdvancedLaptopGestures(value: Boolean) { context.dataStore.edit { it[Key.advancedGestures] = value } }
+    suspend fun setPinchToZoom(value: Boolean) { context.dataStore.edit { it[Key.pinchZoom] = value } }
     suspend fun setKeepAwake(value: Boolean) { context.dataStore.edit { it[Key.awake] = value } }
     private fun action(name: String?, fallback: DeskAction) = name?.let { runCatching { DeskAction.valueOf(it) }.getOrNull() } ?: fallback
 }

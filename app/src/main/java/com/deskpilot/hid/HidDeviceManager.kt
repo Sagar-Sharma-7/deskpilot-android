@@ -44,6 +44,9 @@ class HidDeviceManager(private val context: Context) {
     private var profileRequestGeneration = 0
     private var protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
     private var reconnectAfterClose: BluetoothDevice? = null
+    private var advancedProfile = false
+    private var profileRefreshPending = false
+    private var profileRefreshScheduled = false
     private val reportHandler = Handler(Looper.getMainLooper())
     private val pendingClickReleases = mutableMapOf<Int, Runnable>()
     private val connectionPrefs: SharedPreferences =
@@ -52,15 +55,24 @@ class HidDeviceManager(private val context: Context) {
     val state: StateFlow<ConnectionState> = _state
     private val executor: Executor = context.mainExecutor
 
+    init {
+        advancedProfile = connectionPrefs.getBoolean(ADVANCED_PROFILE, false)
+    }
+
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             this@HidDeviceManager.registered = registered
             if (!registered) {
                 channelOpen = false
                 host = null
+                if (profileRefreshPending) {
+                    scheduleProfileRegistration()
+                    return
+                }
                 _state.value = ConnectionState.Error("DeskPilot is no longer registered as a Bluetooth HID device")
                 return
             }
+            profileRefreshPending = false
             if (pluggedDevice == null) {
                 host = null
                 channelOpen = false
@@ -135,8 +147,13 @@ class HidDeviceManager(private val context: Context) {
         }
 
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-            if (id.toInt() != HidReportEncoder.MOUSE_REPORT_ID) return
-            val report = currentReport(0, 0, 0)
+            val report = when {
+                protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE && id.toInt() == HidReportEncoder.BASIC_MOUSE_REPORT_ID ->
+                    HidReportEncoder.bootMouse(buttons, 0, 0)
+                id.toInt() == mouseReportId() -> currentReport(0, 0, 0, 0)
+                advancedProfile && id.toInt() == HidReportEncoder.KEYBOARD_REPORT_ID -> HidReportEncoder.keyboard(0)
+                else -> return
+            }
             val reply = report.copyOf(maxOf(report.size, bufferSize))
             if (hid?.replyReport(device, type, id, reply) != true) {
                 Log.w(TAG, "Could not reply to HID GET_REPORT for ${device.address}")
@@ -221,10 +238,10 @@ class HidDeviceManager(private val context: Context) {
             hid?.registerApp(
                 BluetoothHidDeviceAppSdpSettings(
                     "DeskPilot",
-                    "Simple Bluetooth trackpad",
+                    if (advancedProfile) "Advanced Bluetooth trackpad" else "Simple Bluetooth trackpad",
                     "DeskPilot",
-                    BluetoothHidDevice.SUBCLASS1_MOUSE,
-                    HidDescriptor.bytes
+                    if (advancedProfile) BluetoothHidDevice.SUBCLASS1_COMBO else BluetoothHidDevice.SUBCLASS1_MOUSE,
+                    if (advancedProfile) HidDescriptor.advancedBytes else HidDescriptor.basicBytes
                 ),
                 null,
                 null,
@@ -241,25 +258,25 @@ class HidDeviceManager(private val context: Context) {
         if (!accepted) _state.value = ConnectionState.Error("Could not register the Bluetooth HID device")
     }
 
-    fun move(dx: Int, dy: Int) = sendMouse(dx, dy, 0)
+    fun move(dx: Int, dy: Int) = sendMouse(dx, dy, 0, 0)
     fun scroll(vertical: Int, horizontal: Int) {
-        if (vertical != 0) sendMouse(0, 0, vertical)
+        if (vertical != 0 || horizontal != 0) sendMouse(0, 0, vertical, if (advancedProfile) horizontal else 0)
     }
 
     fun setButton(button: Int, down: Boolean) {
         cancelPendingClickRelease(button)
         buttons = if (down) buttons or button else buttons and button.inv()
-        sendMouse(0, 0, 0)
+        sendMouse(0, 0, 0, 0)
     }
 
     fun click(button: Int) {
         cancelPendingClickRelease(button)
         buttons = buttons or button
-        sendMouse(0, 0, 0)
+        sendMouse(0, 0, 0, 0)
         val release = Runnable {
             pendingClickReleases.remove(button)
             buttons = buttons and button.inv()
-            sendMouse(0, 0, 0)
+            sendMouse(0, 0, 0, 0)
         }
         pendingClickReleases[button] = release
         reportHandler.postDelayed(release, CLICK_HOLD_MS)
@@ -268,22 +285,37 @@ class HidDeviceManager(private val context: Context) {
     fun releaseAll() {
         cancelAllClickReleases()
         buttons = 0
-        sendMouse(0, 0, 0)
+        sendMouse(0, 0, 0, 0)
     }
 
-    /** Keyboard reports are intentionally not part of the fixed mouse profile. */
-    fun key(modifiers: Int, vararg keys: Int) = Unit
+    /** Keyboard reports exist only in the optional advanced profile. */
+    fun key(modifiers: Int, vararg keys: Int) {
+        val device = host ?: return
+        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
+        sendNow(device, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(modifiers, *keys))
+        reportHandler.postDelayed({
+            if (channelOpen && host?.address == device.address) {
+                sendNow(device, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(0))
+            }
+        }, KEY_HOLD_MS)
+    }
     fun discardPendingMotion() = Unit
 
-    private fun sendMouse(dx: Int, dy: Int, wheel: Int) {
+    private fun sendMouse(dx: Int, dy: Int, wheel: Int, pan: Int) {
         val device = host ?: return
         if (!channelOpen) return
-        sendNow(device, HidReportEncoder.MOUSE_REPORT_ID, currentReport(dx, dy, wheel))
+        sendNow(device, mouseReportId(), currentReport(dx, dy, wheel, pan))
     }
 
-    private fun currentReport(dx: Int, dy: Int, wheel: Int): ByteArray =
+    private fun mouseReportId() = if (advancedProfile && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
+        HidReportEncoder.ADVANCED_MOUSE_REPORT_ID
+    } else HidReportEncoder.BASIC_MOUSE_REPORT_ID
+
+    private fun currentReport(dx: Int, dy: Int, wheel: Int, pan: Int): ByteArray =
         if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
             HidReportEncoder.bootMouse(buttons, dx, dy)
+        } else if (advancedProfile) {
+            HidReportEncoder.advancedMouse(buttons, dx, dy, wheel, pan)
         } else {
             HidReportEncoder.mouse(buttons, dx, dy, wheel)
         }
@@ -291,7 +323,7 @@ class HidDeviceManager(private val context: Context) {
     private fun resetButtonsAndSendNeutral() {
         cancelAllClickReleases()
         buttons = 0
-        sendMouse(0, 0, 0)
+        sendMouse(0, 0, 0, 0)
     }
 
     private fun sendNow(device: BluetoothDevice, reportId: Int, data: ByteArray) {
@@ -304,6 +336,46 @@ class HidDeviceManager(private val context: Context) {
         if (accepted) return
         channelOpen = false
         _state.value = ConnectionState.Error("Windows is not accepting DeskPilot mouse reports")
+    }
+
+    /**
+     * Changes profile only after explicit user confirmation. Windows must be
+     * paired again because it caches the HID descriptor for each Bluetooth bond.
+     */
+    @SuppressLint("MissingPermission")
+    fun setAdvancedProfile(enabled: Boolean) {
+        if (advancedProfile == enabled) return
+        val service = hid
+        if (service != null && registered) releaseAll()
+        advancedProfile = enabled
+        connectionPrefs.edit().putBoolean(ADVANCED_PROFILE, enabled).apply()
+        if (service == null || !registered) return
+        profileRefreshPending = true
+        registered = false
+        channelOpen = false
+        host = null
+        _state.value = ConnectionState.Registering
+        try {
+            service.unregisterApp()
+        } catch (error: SecurityException) {
+            profileRefreshPending = false
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return
+        } catch (error: RuntimeException) {
+            profileRefreshPending = false
+            reportBluetoothFailure("This phone could not change the HID profile", error)
+            return
+        }
+        scheduleProfileRegistration()
+    }
+
+    private fun scheduleProfileRegistration() {
+        if (profileRefreshScheduled) return
+        profileRefreshScheduled = true
+        reportHandler.postDelayed({
+            profileRefreshScheduled = false
+            if (profileRefreshPending && hid != null && !registered) register()
+        }, PROFILE_REFRESH_DELAY_MS)
     }
 
     @SuppressLint("MissingPermission")
@@ -404,7 +476,10 @@ class HidDeviceManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun stop() {
         releaseAll()
+        reportHandler.removeCallbacksAndMessages(null)
         reconnectAfterClose = null
+        profileRefreshPending = false
+        profileRefreshScheduled = false
         host = null
         channelOpen = false
         hid?.unregisterApp()
@@ -429,7 +504,10 @@ class HidDeviceManager(private val context: Context) {
     private companion object {
         const val LAST_HOST_ADDRESS = "last_host_address"
         const val TAG = "DeskPilotHid"
+        const val ADVANCED_PROFILE = "advanced_profile"
         const val CLICK_HOLD_MS = 28L
+        const val KEY_HOLD_MS = 24L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
+        const val PROFILE_REFRESH_DELAY_MS = 350L
     }
 }
