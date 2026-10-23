@@ -39,6 +39,11 @@ class HidDeviceManager(private val context: Context) {
     private var flushScheduled = false
     private var lastReportAtMs = 0L
     private val reportHandler = Handler(Looper.getMainLooper())
+    /**
+     * Delayed tap releases must not be allowed to release a later hold/drag.
+     * Keep each pending release so a new explicit button action can supersede it.
+     */
+    private val pendingClickReleases = mutableMapOf<Int, Runnable>()
     private val connectionPrefs: SharedPreferences = context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
     val state: StateFlow<ConnectionState> = _state
@@ -72,8 +77,9 @@ class HidDeviceManager(private val context: Context) {
                     _state.value = ConnectionState.Connected(device.name ?: device.address)
                     Log.i(TAG, "HID virtual cable opened for ${device.address}")
                     // Give the host a known initial mouse state as soon as its
-                    // interrupt channel opens.
-                    sendNow(device, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(0, 0, 0))
+                    // interrupt channel opens. In particular, never carry a
+                    // left-button-down state across a virtual-cable reconnect.
+                    resetInputState(device)
                 }
                 BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> if (host?.address == device.address || _state.value is ConnectionState.Connecting) {
                     host = null
@@ -156,6 +162,7 @@ class HidDeviceManager(private val context: Context) {
             hid = null
             host = null
             buttons = 0
+            clearQueuedMotion()
             _state.value = ConnectionState.Error("Bluetooth HID service stopped")
         }
     }
@@ -217,6 +224,8 @@ class HidDeviceManager(private val context: Context) {
         if (vertical != 0 || horizontal != 0) Log.d(TAG, "Scroll disabled in boot-mouse stability mode")
     }
     fun setButton(button: Int, down: Boolean) {
+        // A deliberate touch/drag action always wins over a previous tap timer.
+        cancelPendingClickRelease(button)
         buttons = if (down) buttons or button else buttons and button.inv()
         mouse(0, 0, immediate = true)
     }
@@ -225,10 +234,22 @@ class HidDeviceManager(private val context: Context) {
      * path. Keep a tap pressed briefly so it is observed as a real click.
      */
     fun click(button: Int) {
-        setButton(button, true)
-        reportHandler.postDelayed({ setButton(button, false) }, CLICK_HOLD_MS)
+        cancelPendingClickRelease(button)
+        buttons = buttons or button
+        mouse(0, 0, immediate = true)
+        val release = Runnable {
+            pendingClickReleases.remove(button)
+            buttons = buttons and button.inv()
+            mouse(0, 0, immediate = true)
+        }
+        pendingClickReleases[button] = release
+        reportHandler.postDelayed(release, CLICK_HOLD_MS)
     }
     fun releaseAll() {
+        // This is the failsafe used when the app loses focus or the user asks to
+        // clear a drag. Drop queued movement and every delayed tap before sending
+        // the neutral boot-mouse report.
+        clearQueuedMotion()
         buttons = 0
         mouse(0, 0, immediate = true)
     }
@@ -300,6 +321,7 @@ class HidDeviceManager(private val context: Context) {
         }
         if (connectionState == BluetoothProfile.STATE_CONNECTED) {
             host = device
+            resetInputState(device)
             _state.value = ConnectionState.Connected(device.name ?: device.address)
             return true
         }
@@ -328,6 +350,7 @@ class HidDeviceManager(private val context: Context) {
             return false
         }
         _state.value = ConnectionState.Connecting(device.name ?: device.address)
+        releaseAll()
         // Do not begin the new virtual cable until Android confirms the old one is
         // closed. Starting both at once races Windows' HID stack.
         val accepted = try {
@@ -382,6 +405,19 @@ class HidDeviceManager(private val context: Context) {
 
     private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
 
+    /** Resets both Android's local state and the host's state at a cable boundary. */
+    private fun resetInputState(device: BluetoothDevice?) {
+        clearQueuedMotion()
+        buttons = 0
+        if (device != null) {
+            sendNow(device, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(0, 0, 0))
+        }
+    }
+
+    private fun cancelPendingClickRelease(button: Int) {
+        pendingClickReleases.remove(button)?.let(reportHandler::removeCallbacks)
+    }
+
     private fun reportBluetoothFailure(message: String, error: Exception) {
         Log.e(TAG, message, error)
         _state.value = ConnectionState.Error("$message. Check Bluetooth permissions and try again.")
@@ -389,6 +425,7 @@ class HidDeviceManager(private val context: Context) {
 
     private fun clearQueuedMotion() {
         reportHandler.removeCallbacksAndMessages(null)
+        pendingClickReleases.clear()
         flushScheduled = false
         queuedDx = 0
         queuedDy = 0

@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onStart() { super.onStart(); model.startBluetooth(hasBluetoothPermissions()) }
+    override fun onPause() { model.releaseInputs(); super.onPause() }
     override fun onStop() { model.releaseInputs(); super.onStop() }
     override fun onDestroy() { if (isFinishing) model.close(); super.onDestroy() }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

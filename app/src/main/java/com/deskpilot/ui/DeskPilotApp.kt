@@ -149,7 +149,10 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             }
         }
         Spacer(Modifier.height(6.dp))
-        AssistChip(onClick = model::toggleDragLock, label = { Text(if (dragLocked) "Release drag" else "Drag lock") })
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(onClick = model::toggleDragLock, label = { Text(if (dragLocked) "Release drag" else "Drag lock") })
+            AssistChip(onClick = model::releaseInputs, label = { Text("Release all") })
+        }
     }
 }
 
