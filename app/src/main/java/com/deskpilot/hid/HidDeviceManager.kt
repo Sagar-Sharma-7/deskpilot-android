@@ -41,6 +41,7 @@ class HidDeviceManager(private val context: Context) {
     private var flushScheduled = false
     private var lastReportAtMs = 0L
     private val reportHandler = Handler(Looper.getMainLooper())
+    private val flushMotionRunnable = Runnable { flushMotion() }
     private val connectionPrefs: SharedPreferences = context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
     val state: StateFlow<ConnectionState> = _state
@@ -224,6 +225,7 @@ class HidDeviceManager(private val context: Context) {
     }
     fun click(button: Int) { setButton(button, true); setButton(button, false) }
     fun releaseAll() {
+        discardPendingMotion()
         buttons = 0
         mouse(0, 0, immediate = true)
         key(0)
@@ -242,10 +244,13 @@ class HidDeviceManager(private val context: Context) {
     }
     private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0, immediate: Boolean = false) {
         if (host == null) return
-        queuedDx += dx
-        queuedDy += dy
-        queuedWheel += wheel
-        queuedPan += pan
+        // BluetoothHidDevice accepts reports asynchronously. Retaining an
+        // unbounded history makes a busy link replay old cursor movement for
+        // seconds. Keep at most two packets of newest movement instead.
+        queuedDx = accumulate(queuedDx, dx)
+        queuedDy = accumulate(queuedDy, dy)
+        queuedWheel = accumulate(queuedWheel, wheel)
+        queuedPan = accumulate(queuedPan, pan)
         if (immediate) {
             flushMotion()
             return
@@ -253,7 +258,7 @@ class HidDeviceManager(private val context: Context) {
         if (flushScheduled) return
         val delay = (MIN_REPORT_INTERVAL_MS - (SystemClock.uptimeMillis() - lastReportAtMs)).coerceAtLeast(0)
         flushScheduled = true
-        reportHandler.postDelayed({ flushMotion() }, delay)
+        reportHandler.postDelayed(flushMotionRunnable, delay)
     }
 
     private fun flushMotion() {
@@ -283,6 +288,17 @@ class HidDeviceManager(private val context: Context) {
         if (accepted) return
         Log.w(TAG, "HID input report was rejected for ${device.address}")
         _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
+    }
+
+    /** Drops unsent relative input when the user lifts their fingers. */
+    fun discardPendingMotion() {
+        reportHandler.removeCallbacks(flushMotionRunnable)
+        flushScheduled = false
+        queuedDx = 0
+        queuedDy = 0
+        queuedWheel = 0
+        queuedPan = 0
+        lastReportAtMs = 0L
     }
     @SuppressLint("MissingPermission")
     fun rememberedDevices(): List<BluetoothDevice> = try {
@@ -386,11 +402,15 @@ class HidDeviceManager(private val context: Context) {
         const val LAST_HOST_ADDRESS = "last_host_address"
         const val TAG = "DeskPilotHid"
         const val BOOT_REPORT_ID = 0
-        const val MIN_REPORT_INTERVAL_MS = 8L
+        // 60 Hz is responsive while leaving headroom for phone Bluetooth stacks
+        // whose HID queue drains more slowly than touch events arrive.
+        const val MIN_REPORT_INTERVAL_MS = 16L
+        const val MAX_PENDING_AXIS = 254
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
     }
 
     private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
+    private fun accumulate(current: Int, delta: Int): Int = (current + delta).coerceIn(-MAX_PENDING_AXIS, MAX_PENDING_AXIS)
 
     private fun reportBluetoothFailure(message: String, error: Exception) {
         Log.e(TAG, message, error)
@@ -398,11 +418,6 @@ class HidDeviceManager(private val context: Context) {
     }
 
     private fun clearQueuedMotion() {
-        reportHandler.removeCallbacksAndMessages(null)
-        flushScheduled = false
-        queuedDx = 0
-        queuedDy = 0
-        queuedWheel = 0
-        queuedPan = 0
+        discardPendingMotion()
     }
 }

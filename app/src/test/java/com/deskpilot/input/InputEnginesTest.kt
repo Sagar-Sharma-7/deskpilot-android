@@ -33,7 +33,7 @@ class InputEnginesTest {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
         engine.down(TouchPoint(3, 0f, 0f), 0)
         engine.move(listOf(TouchPoint(3, 50f, 0f)), 40); engine.up(3, 90)
-        assertTrue(sink.clicks.isEmpty()); assertTrue(sink.moves.isNotEmpty())
+        assertTrue(sink.clicks.isEmpty()); assertTrue(sink.moves.isNotEmpty()); assertEquals(1, sink.finishCalls)
     }
     @Test fun `parallel two-finger scrolling never turns into a pinch`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
@@ -64,8 +64,8 @@ class InputEnginesTest {
 }
 
 private class RecordingSink : GestureSink {
-    val moves = mutableListOf<Pair<Float, Float>>(); val scrolls = mutableListOf<Pair<Float, Float>>(); val pinches = mutableListOf<Float>(); val clicks = mutableListOf<Pair<Int, MouseButton>>(); val swipes = mutableListOf<Pair<Int, Pair<Float, Float>>>(); var downs = 0; var ups = 0
-    override fun move(dx: Float, dy: Float) { moves += dx to dy }; override fun scroll(dx: Float, dy: Float) { scrolls += dx to dy }
+    val moves = mutableListOf<Pair<Float, Float>>(); val scrolls = mutableListOf<Pair<Float, Float>>(); val pinches = mutableListOf<Float>(); val clicks = mutableListOf<Pair<Int, MouseButton>>(); val swipes = mutableListOf<Pair<Int, Pair<Float, Float>>>(); var downs = 0; var ups = 0; var finishCalls = 0
+    override fun move(dx: Float, dy: Float) { moves += dx to dy }; override fun scroll(dx: Float, dy: Float) { scrolls += dx to dy }; override fun finishMotion() { finishCalls++ }
     override fun mouseDown() { downs++ }; override fun mouseUp() { ups++ }; override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) { clicks += count to button }
     override fun swipe(fingers: Int, dx: Float, dy: Float) { swipes += fingers to (dx to dy) }; override fun pinch(scaleDelta: Float) { pinches += scaleDelta }; override fun cancel() = Unit
 }

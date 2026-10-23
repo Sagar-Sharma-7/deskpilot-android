@@ -64,6 +64,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     private fun toggleDragLock() { dragLocked = !dragLocked; hid.setButton(HidReportEncoder.LEFT, dragLocked) }
     override fun move(dx: Float, dy: Float) { val (x, y) = pointer.move(dx, dy); if (x != 0 || y != 0) hid.move(x, y) }
     override fun scroll(dx: Float, dy: Float) { val (v, h) = scroll.scroll(dx, dy, settings.value.naturalScroll); if (v != 0 || h != 0) hid.scroll(v, h) }
+    override fun finishMotion() = hid.discardPendingMotion()
     override fun mouseDown() { hid.setButton(HidReportEncoder.LEFT, true); haptic(HapticCue.DRAG_START) }
     override fun mouseUp() = hid.setButton(HidReportEncoder.LEFT, false)
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) {

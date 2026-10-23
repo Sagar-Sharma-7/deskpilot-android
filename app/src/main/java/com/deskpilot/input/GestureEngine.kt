@@ -7,6 +7,7 @@ data class TouchPoint(val id: Int, val x: Float, val y: Float)
 interface GestureSink {
     fun move(dx: Float, dy: Float)
     fun scroll(dx: Float, dy: Float)
+    fun finishMotion()
     fun mouseDown()
     fun mouseUp()
     fun click(count: Int = 1, button: MouseButton = MouseButton.LEFT, isDoubleTap: Boolean = false)
@@ -116,6 +117,8 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         val finalCount = maxFingers
         points = points - id
         if (points.isNotEmpty()) { start = points; pinchDistance = distanceBetweenFirstTwo(); return }
+        // Never replay a queue of stale pointer deltas after the finger lifts.
+        sink.finishMotion()
         if (dragging) { sink.mouseUp(); reset(); return }
         val elapsed = time - startedAt
         if (!moved && elapsed < 280) {

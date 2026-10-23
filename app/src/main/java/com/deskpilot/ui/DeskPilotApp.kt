@@ -5,6 +5,7 @@ import android.content.Intent
 import android.provider.Settings
 import android.view.MotionEvent
 import android.view.WindowManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -37,13 +38,16 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
     var screen by rememberSaveable { mutableStateOf(Screen.TRACKPAD) }
     val view = LocalView.current
     val activity = LocalContext.current as? Activity
-    DisposableEffect(settings.extremeDark, settings.keepAwake, activity, view) {
+    val dimTrackpad = settings.extremeDark && screen == Screen.TRACKPAD
+    DisposableEffect(dimTrackpad, settings.keepAwake, activity, view) {
         val window = activity?.window
         val previousBrightness = window?.attributes?.screenBrightness ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         val previousKeepScreenOn = view.keepScreenOn
         view.keepScreenOn = settings.keepAwake
-        if (settings.extremeDark && window != null) {
-            window.attributes = window.attributes.apply { screenBrightness = 0.02f }
+        if (dimTrackpad && window != null) {
+            // The trackpad can be dim; controls such as the Settings back button
+            // must remain readable at the user's normal brightness.
+            window.attributes = window.attributes.apply { screenBrightness = 0.08f }
         }
         onDispose {
             view.keepScreenOn = previousKeepScreenOn
@@ -51,7 +55,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         }
     }
     val colors = when {
-        settings.extremeDark -> extremeDarkColorScheme()
+        dimTrackpad -> extremeDarkColorScheme()
         settings.darkTheme -> darkColorScheme()
         else -> lightColorScheme()
     }
@@ -115,7 +119,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             MotionEvent.ACTION_CANCEL -> model.gestures.cancel()
         }
         true
-    }, color = if (extremeDark) Color(0xFF030303) else MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), tonalElevation = if (extremeDark) 0.dp else 1.dp) {}
+    }, color = if (extremeDark) Color(0xFF030303) else MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), tonalElevation = if (extremeDark) 0.dp else 1.dp, border = if (extremeDark) BorderStroke(1.dp, Color(0xFF3B3B3B)) else null) {}
 }
 
 @Composable private fun QuickActions(model: DeskPilotViewModel) {
@@ -207,7 +211,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Volume down"); TextButton({ chooseFor = false }) { Text(settings.volumeDown.label) } }
         SettingsHeader("Appearance")
         SettingToggle("Dark theme", "", settings.darkTheme, model::setDark)
-        SettingToggle("Extreme dark mode", "True black with 2% brightness while DeskPilot is open", settings.extremeDark, model::setExtremeDark)
+        SettingToggle("Extreme dark mode", "Pure-black low-brightness trackpad; Settings stay readable", settings.extremeDark, model::setExtremeDark)
         SettingToggle("Keep display awake", "Required while using the interactive trackpad", settings.keepAwake, model::setKeepAwake)
         SettingToggle("Haptics", "Clicks and shortcuts only", settings.haptics, model::setHaptics)
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
