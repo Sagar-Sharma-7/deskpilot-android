@@ -36,6 +36,12 @@ class InputEnginesTest {
         assertEquals(0 to 1, engine.scroll(0f, 2f, natural = true))
     }
 
+    @Test fun `high resolution scroll keeps the same travel in fine wheel units`() {
+        val engine = ScrollEngine()
+        engine.updateSpeed(.25f, highResolution = true)
+        assertEquals(0 to 8, engine.scroll(0f, 2f, natural = true))
+    }
+
     @Test fun `one finger move moves the cursor without clicking`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
         engine.down(TouchPoint(1, 0f, 0f), 0)
