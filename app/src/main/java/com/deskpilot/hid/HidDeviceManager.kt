@@ -73,7 +73,7 @@ class HidDeviceManager(private val context: Context) {
                     Log.i(TAG, "HID virtual cable opened for ${device.address}")
                     // Give the host a known initial mouse state as soon as its
                     // interrupt channel opens.
-                    sendNow(device, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(0, 0))
+                    sendNow(device, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(0, 0, 0))
                 }
                 BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> if (host?.address == device.address || _state.value is ConnectionState.Connecting) {
                     host = null
