@@ -38,6 +38,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     private var twoFingerMode = TwoFingerMode.UNDECIDED
     private var lastTapAt = -10_000L
     private var lastTap: TouchPoint? = null
+    private var doubleTapDragCandidate = false
     private var pinchDistance = 0f
     private var twoFingerStartDistance = 0f
     private var twoFingerStartCenter = 0f to 0f
@@ -48,6 +49,9 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         val hadNone = points.isEmpty()
         points = points + (point.id to point)
         if (hadNone) {
+            doubleTapDragCandidate = time - lastTapAt <= config.doubleTapMs && lastTap?.let {
+                hypot((it.x - point.x).toDouble(), (it.y - point.y).toDouble()) < config.tapSlop
+            } == true
             start = points; startedAt = time; maxFingers = 1; moved = false; scrolling = false; dragging = false; twoFingerMode = TwoFingerMode.UNDECIDED
             gestureOrigin = centroid(); latestCentroid = gestureOrigin
         } else {
@@ -80,7 +84,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
             val dx = p.x - previous.x; val dy = p.y - previous.y
             val total = start[p.id]?.let { hypot((p.x - it.x).toDouble(), (p.y - it.y).toDouble()).toFloat() } ?: 0f
             if (total > config.tapSlop) moved = true
-            if (!dragging && lastTapAt + config.doubleTapMs >= time && total > config.dragSlop) { dragging = true; sink.mouseDown() }
+            if (!dragging && doubleTapDragCandidate && total > config.dragSlop) { dragging = true; sink.mouseDown() }
             sink.move(dx, dy)
         } else if (points.size == 2 && old.size == 2) {
             val ids = points.keys.sorted(); val p1 = points.getValue(ids[0]); val p2 = points.getValue(ids[1])
@@ -141,7 +145,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         reset()
     }
     fun cancel() { if (dragging) sink.mouseUp(); sink.cancel(); reset() }
-    private fun reset() { points = emptyMap(); start = emptyMap(); moved = false; scrolling = false; dragging = false; twoFingerMode = TwoFingerMode.UNDECIDED; maxFingers = 0 }
+    private fun reset() { points = emptyMap(); start = emptyMap(); moved = false; scrolling = false; dragging = false; doubleTapDragCandidate = false; twoFingerMode = TwoFingerMode.UNDECIDED; maxFingers = 0 }
     private fun distanceBetweenFirstTwo(): Float = if (points.size < 2) 0f else points.values.take(2).let { hypot((it[0].x-it[1].x).toDouble(), (it[0].y-it[1].y).toDouble()).toFloat() }
     private fun centroid(): Pair<Float, Float> = points.values.fold(0f to 0f) { sum, p -> sum.first + p.x to sum.second + p.y }.let { it.first / points.size to it.second / points.size }
     private fun distance(a: Pair<Float, Float>, b: Pair<Float, Float>) = hypot((a.first - b.first).toDouble(), (a.second - b.second).toDouble()).toFloat()

@@ -7,7 +7,6 @@ import android.content.SharedPreferences
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,14 +33,7 @@ class HidDeviceManager(private val context: Context) {
     private var profileRequestGeneration = 0
     private var protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
     private var reconnectAfterClose: BluetoothDevice? = null
-    private var queuedDx = 0
-    private var queuedDy = 0
-    private var queuedWheel = 0
-    private var queuedPan = 0
-    private var flushScheduled = false
-    private var lastReportAtMs = 0L
     private val reportHandler = Handler(Looper.getMainLooper())
-    private val flushMotionRunnable = Runnable { flushMotion() }
     private val connectionPrefs: SharedPreferences = context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
     val state: StateFlow<ConnectionState> = _state
@@ -221,13 +213,12 @@ class HidDeviceManager(private val context: Context) {
     fun scroll(vertical: Int, horizontal: Int) = mouse(0, 0, vertical, horizontal)
     fun setButton(button: Int, down: Boolean) {
         buttons = if (down) buttons or button else buttons and button.inv()
-        mouse(0, 0, immediate = true)
+        mouse(0, 0)
     }
     fun click(button: Int) { setButton(button, true); setButton(button, false) }
     fun releaseAll() {
-        discardPendingMotion()
         buttons = 0
-        mouse(0, 0, immediate = true)
+        mouse(0, 0)
         key(0)
     }
     fun key(modifiers: Int, vararg keys: Int) {
@@ -242,39 +233,18 @@ class HidDeviceManager(private val context: Context) {
         sendNow(currentHost, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(modifiers, *keys))
         sendNow(currentHost, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(0))
     }
-    private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0, immediate: Boolean = false) {
-        if (host == null) return
-        // BluetoothHidDevice accepts reports asynchronously. Retaining an
-        // unbounded history makes a busy link replay old cursor movement for
-        // seconds. Keep at most two packets of newest movement instead.
-        queuedDx = accumulate(queuedDx, dx)
-        queuedDy = accumulate(queuedDy, dy)
-        queuedWheel = accumulate(queuedWheel, wheel)
-        queuedPan = accumulate(queuedPan, pan)
-        if (immediate) {
-            flushMotion()
-            return
-        }
-        if (flushScheduled) return
-        val delay = (MIN_REPORT_INTERVAL_MS - (SystemClock.uptimeMillis() - lastReportAtMs)).coerceAtLeast(0)
-        flushScheduled = true
-        reportHandler.postDelayed(flushMotionRunnable, delay)
-    }
-
-    private fun flushMotion() {
-        flushScheduled = false
-        val currentHost = host ?: run { clearQueuedMotion(); return }
-        val dx = takeAxis { queuedDx }.also { queuedDx -= it }
-        val dy = takeAxis { queuedDy }.also { queuedDy -= it }
-        val wheel = takeAxis { queuedWheel }.also { queuedWheel -= it }
-        val pan = takeAxis { queuedPan }.also { queuedPan -= it }
+    /**
+     * Send each current touch delta immediately. Android's HID transport already
+     * performs its own flow control; an app-side timer produced visible queues
+     * on both tested phones and replayed old motion after a finger stopped.
+     */
+    private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0) {
+        val currentHost = host ?: return
         if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
             sendNow(currentHost, BOOT_REPORT_ID, HidReportEncoder.bootMouse(buttons, dx, dy))
         } else {
             sendNow(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy, wheel, pan))
         }
-        lastReportAtMs = SystemClock.uptimeMillis()
-        if (queuedDx != 0 || queuedDy != 0 || queuedWheel != 0 || queuedPan != 0) mouse(0, 0)
     }
 
     /** Makes a stale virtual-cable connection visible instead of silently dropping input. */
@@ -290,16 +260,8 @@ class HidDeviceManager(private val context: Context) {
         _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
     }
 
-    /** Drops unsent relative input when the user lifts their fingers. */
-    fun discardPendingMotion() {
-        reportHandler.removeCallbacks(flushMotionRunnable)
-        flushScheduled = false
-        queuedDx = 0
-        queuedDy = 0
-        queuedWheel = 0
-        queuedPan = 0
-        lastReportAtMs = 0L
-    }
+    /** Direct report delivery means there is no app-side motion backlog to clear. */
+    fun discardPendingMotion() = Unit
     @SuppressLint("MissingPermission")
     fun rememberedDevices(): List<BluetoothDevice> = try {
         adapter?.bondedDevices?.toList().orEmpty()
@@ -402,22 +364,13 @@ class HidDeviceManager(private val context: Context) {
         const val LAST_HOST_ADDRESS = "last_host_address"
         const val TAG = "DeskPilotHid"
         const val BOOT_REPORT_ID = 0
-        // 60 Hz is responsive while leaving headroom for phone Bluetooth stacks
-        // whose HID queue drains more slowly than touch events arrive.
-        const val MIN_REPORT_INTERVAL_MS = 16L
-        const val MAX_PENDING_AXIS = 254
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
     }
-
-    private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
-    private fun accumulate(current: Int, delta: Int): Int = (current + delta).coerceIn(-MAX_PENDING_AXIS, MAX_PENDING_AXIS)
 
     private fun reportBluetoothFailure(message: String, error: Exception) {
         Log.e(TAG, message, error)
         _state.value = ConnectionState.Error("$message. Check Bluetooth permissions and try again.")
     }
 
-    private fun clearQueuedMotion() {
-        discardPendingMotion()
-    }
+    private fun clearQueuedMotion() = Unit
 }

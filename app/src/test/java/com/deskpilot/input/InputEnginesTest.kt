@@ -29,6 +29,20 @@ class InputEnginesTest {
         engine.down(TouchPoint(2, 12f, 12f), 150); engine.up(2, 210)
         assertEquals(listOf(1, 1), sink.clicks.map { it.first })
     }
+    @Test fun `a move after a tap elsewhere does not start text-selection drag`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 10f, 10f), 0); engine.up(1, 80)
+        engine.down(TouchPoint(2, 180f, 180f), 150)
+        engine.move(listOf(TouchPoint(2, 250f, 180f)), 180)
+        assertEquals(0, sink.downs)
+    }
+    @Test fun `second tap at the same place can begin a drag`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 10f, 10f), 0); engine.up(1, 80)
+        engine.down(TouchPoint(2, 12f, 12f), 150)
+        engine.move(listOf(TouchPoint(2, 50f, 12f)), 180)
+        assertEquals(1, sink.downs)
+    }
     @Test fun `movement prevents accidental tap`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
         engine.down(TouchPoint(3, 0f, 0f), 0)
