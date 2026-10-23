@@ -180,7 +180,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         if (state is ConnectionState.Connected || state is ConnectionState.Error) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = model::reconnect, enabled = bluetoothReady || state is ConnectionState.Error) {
-                Text("Reconnect mouse input")
+                Text("Rebuild mouse input")
             }
         }
         Spacer(Modifier.height(8.dp)); OutlinedButton(onClick = makeDiscoverable, enabled = bluetoothReady) { Text("Make phone discoverable for 5 minutes") }

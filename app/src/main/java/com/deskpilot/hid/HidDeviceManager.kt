@@ -34,6 +34,8 @@ class HidDeviceManager(private val context: Context) {
     private var profileRequestGeneration = 0
     private var protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
     private var reconnectAfterClose: BluetoothDevice? = null
+    private var reconnectAfterRegistration: BluetoothDevice? = null
+    private var registrationRefreshScheduled = false
     private var queuedDx = 0
     private var queuedDy = 0
     private var flushScheduled = false
@@ -53,7 +55,34 @@ class HidDeviceManager(private val context: Context) {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             this@HidDeviceManager.registered = registered
             if (!registered) {
+                // A manual input rebuild deliberately unregisters first. Android
+                // delivers this callback before the app can be registered again.
+                if (reconnectAfterRegistration != null) {
+                    scheduleFreshRegistration()
+                    return
+                }
                 _state.value = ConnectionState.Error("DeskPilot is no longer registered as a Bluetooth HID device")
+                return
+            }
+            val deviceToReconnect = reconnectAfterRegistration
+            if (deviceToReconnect != null) {
+                reconnectAfterRegistration = null
+                // Some phones restore the fresh virtual cable before delivering
+                // this registration callback. Do not call connect() a second time
+                // in that case: Android returns false even though the new HID
+                // channel is already usable.
+                val restoredDevice = pluggedDevice
+                if (restoredDevice != null && restoredDevice.address == deviceToReconnect.address) {
+                    host = restoredDevice
+                    protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
+                    rememberHost(restoredDevice)
+                    resetInputState(restoredDevice)
+                    _state.value = ConnectionState.Connected(restoredDevice.name ?: restoredDevice.address)
+                } else {
+                    host = null
+                    _state.value = ConnectionState.Connecting(deviceToReconnect.name ?: deviceToReconnect.address)
+                    connectAfterFreshRegistration(deviceToReconnect)
+                }
                 return
             }
             if (pluggedDevice != null) {
@@ -290,7 +319,7 @@ class HidDeviceManager(private val context: Context) {
         }
         if (accepted) return
         Log.w(TAG, "HID input report was rejected for ${device.address}")
-        _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
+        _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Rebuild mouse input.")
     }
 
     /** The stable profile flushes the short mouse queue in report order. */
@@ -320,10 +349,10 @@ class HidDeviceManager(private val context: Context) {
             return false
         }
         if (connectionState == BluetoothProfile.STATE_CONNECTED) {
-            host = device
-            resetInputState(device)
-            _state.value = ConnectionState.Connected(device.name ?: device.address)
-            return true
+            // A device can retain a Bluetooth link after Windows has dropped its
+            // HID interrupt channel. Re-open the virtual cable instead of
+            // presenting that stale connection as a working mouse.
+            return restartVirtualCable(service, device)
         }
         rememberHost(device)
         _state.value = ConnectionState.Connecting(device.name ?: device.address)
@@ -340,7 +369,11 @@ class HidDeviceManager(private val context: Context) {
         return accepted
     }
 
-    /** Restarts the HID transport without deleting the Windows Bluetooth pairing. */
+    /**
+     * Rebuilds the Android HID registration and reconnects without deleting the
+     * Windows Bluetooth pairing. This repairs a connected-but-inactive HID
+     * virtual cable, which a simple Bluetooth reconnect does not always fix.
+     */
     @SuppressLint("MissingPermission")
     fun reconnect(): Boolean {
         val device = host ?: lastRememberedHost()
@@ -349,26 +382,78 @@ class HidDeviceManager(private val context: Context) {
             _state.value = ConnectionState.Error("No remembered computer to reconnect")
             return false
         }
-        _state.value = ConnectionState.Connecting(device.name ?: device.address)
         releaseAll()
-        // Do not begin the new virtual cable until Android confirms the old one is
-        // closed. Starting both at once races Windows' HID stack.
+        reconnectAfterClose = null
+        reconnectAfterRegistration = device
+        registered = false
+        host = null
+        _state.value = ConnectionState.Registering
         val accepted = try {
-            if (host?.address == device.address) {
-                reconnectAfterClose = device
-                service.disconnect(device)
-            } else service.connect(device)
+            // Unregistering closes any stale virtual cable. The physical Windows
+            // pairing remains intact; on registration Android reconnects it below.
+            service.unregisterApp()
         } catch (error: SecurityException) {
+            reconnectAfterRegistration = null
             reportBluetoothFailure("Nearby devices permission is required", error)
             return false
         } catch (error: RuntimeException) {
+            reconnectAfterRegistration = null
+            reportBluetoothFailure("This phone could not restart the HID connection", error)
+            return false
+        }
+        scheduleFreshRegistration()
+        if (!accepted) {
+            Log.w(TAG, "HID unregister returned false; attempting a clean registration anyway")
+        }
+        return true
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun restartVirtualCable(service: BluetoothHidDevice, device: BluetoothDevice): Boolean {
+        releaseAll()
+        reconnectAfterClose = device
+        _state.value = ConnectionState.Connecting(device.name ?: device.address)
+        val accepted = try {
+            service.disconnect(device)
+        } catch (error: SecurityException) {
+            reconnectAfterClose = null
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return false
+        } catch (error: RuntimeException) {
+            reconnectAfterClose = null
             reportBluetoothFailure("This phone could not restart the HID connection", error)
             return false
         }
         if (!accepted) {
-            _state.value = ConnectionState.Error("Could not restart the HID connection. Turn Bluetooth off and on once on Windows, then tap Reconnect.")
+            reconnectAfterClose = null
+            _state.value = ConnectionState.Error("Could not refresh the HID connection. Tap Rebuild mouse input.")
         }
         return accepted
+    }
+
+    private fun scheduleFreshRegistration() {
+        if (registrationRefreshScheduled) return
+        registrationRefreshScheduled = true
+        reportHandler.postDelayed({
+            registrationRefreshScheduled = false
+            if (reconnectAfterRegistration != null && hid != null && !registered) register()
+        }, FRESH_REGISTRATION_DELAY_MS)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectAfterFreshRegistration(device: BluetoothDevice) {
+        val accepted = try {
+            hid?.connect(device) == true
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not restart the HID connection", error)
+            return
+        }
+        if (!accepted) {
+            _state.value = ConnectionState.Error("Windows rejected the refreshed HID connection. Turn Bluetooth off and on once on Windows, then tap Rebuild mouse input.")
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -388,6 +473,8 @@ class HidDeviceManager(private val context: Context) {
     }
     @SuppressLint("MissingPermission")
     fun stop() {
+        reconnectAfterClose = null
+        reconnectAfterRegistration = null
         clearQueuedMotion()
         releaseAll()
         hid?.unregisterApp()
@@ -401,6 +488,7 @@ class HidDeviceManager(private val context: Context) {
         const val MIN_REPORT_INTERVAL_MS = 8L
         const val CLICK_HOLD_MS = 28L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
+        const val FRESH_REGISTRATION_DELAY_MS = 350L
     }
 
     private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
