@@ -58,6 +58,26 @@ class InputEnginesTest {
         assertEquals(listOf(1 to MouseButton.RIGHT), sink.clicks)
     }
 
+    @Test fun `second tap held and moved begins a selection drag`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 10f, 10f), 0)
+        engine.up(1, 80)
+        engine.down(TouchPoint(2, 12f, 12f), 500)
+        engine.move(listOf(TouchPoint(2, 45f, 12f)), 540)
+        engine.up(2, 600)
+        assertEquals(1, sink.mouseDowns)
+        assertEquals(1, sink.mouseUps)
+    }
+
+    @Test fun `a delayed second tap does not start a selection drag`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 10f, 10f), 0)
+        engine.up(1, 80)
+        engine.down(TouchPoint(2, 12f, 12f), 1_100)
+        engine.move(listOf(TouchPoint(2, 45f, 12f)), 1_140)
+        assertEquals(0, sink.mouseDowns)
+    }
+
     @Test fun `two fingers scroll and never pinch or swipe`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
         engine.down(TouchPoint(1, 20f, 20f), 0)
@@ -78,12 +98,14 @@ private class RecordingSink : GestureSink {
     val clicks = mutableListOf<Pair<Int, MouseButton>>()
     val swipes = mutableListOf<Pair<Int, Pair<Float, Float>>>()
     var finishCalls = 0
+    var mouseDowns = 0
+    var mouseUps = 0
 
     override fun move(dx: Float, dy: Float) { moves += dx to dy }
     override fun scroll(dx: Float, dy: Float) { scrolls += dx to dy }
     override fun finishMotion() { finishCalls++ }
-    override fun mouseDown() = Unit
-    override fun mouseUp() = Unit
+    override fun mouseDown() { mouseDowns++ }
+    override fun mouseUp() { mouseUps++ }
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) { clicks += count to button }
     override fun swipe(fingers: Int, dx: Float, dy: Float) { swipes += fingers to (dx to dy) }
     override fun pinch(scaleDelta: Float) { pinches += scaleDelta }

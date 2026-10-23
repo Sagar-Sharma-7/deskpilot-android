@@ -21,28 +21,44 @@ enum class MouseButton { LEFT, RIGHT, MIDDLE }
 /**
  * Small, predictable touchpad gesture set:
  * one finger moves/taps, two fingers scroll, and a two-finger tap right-clicks.
- * Dragging remains available through the explicit left button below the pad.
+ * A quick second tap held while moving begins the standard text-selection drag.
  */
 class GestureEngine(private val sink: GestureSink, private val config: Config = Config()) {
-    data class Config(val tapSlop: Float = 18f, val tapTimeoutMs: Long = 280)
+    data class Config(
+        val tapSlop: Float = 18f,
+        val tapTimeoutMs: Long = 280,
+        val doubleTapDragTimeoutMs: Long = 900
+    )
 
     private var points = emptyMap<Int, TouchPoint>()
     private var start = emptyMap<Int, TouchPoint>()
     private var startedAt = 0L
     private var maxFingers = 0
     private var moved = false
+    private var lastTapAt = Long.MIN_VALUE
+    private var lastTap: TouchPoint? = null
+    private var doubleTapDragCandidate = false
+    private var dragging = false
 
     fun down(point: TouchPoint, time: Long) {
         val firstFinger = points.isEmpty()
         points = points + (point.id to point)
         if (firstFinger) {
+            doubleTapDragCandidate = time - lastTapAt <= config.doubleTapDragTimeoutMs && lastTap?.let {
+                hypot((point.x - it.x).toDouble(), (point.y - it.y).toDouble()).toFloat() < config.tapSlop
+            } == true
             start = points
             startedAt = time
             maxFingers = 1
             moved = false
+            dragging = doubleTapDragCandidate
+            // Hold the second tap immediately. This preserves the anchor point
+            // for Windows text selection instead of waiting for a later move.
+            if (dragging) sink.mouseDown()
         } else {
             start = points
             maxFingers = maxOf(maxFingers, points.size)
+            doubleTapDragCandidate = false
         }
     }
 
@@ -86,9 +102,18 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
             return
         }
         sink.finishMotion()
+        if (dragging) {
+            sink.mouseUp()
+            reset()
+            return
+        }
         if (!moved && time - startedAt < config.tapTimeoutMs) {
             when (fingers) {
-                1 -> sink.click()
+                1 -> {
+                    sink.click()
+                    lastTapAt = time
+                    lastTap = released
+                }
                 2 -> sink.click(button = MouseButton.RIGHT)
             }
         }
@@ -96,6 +121,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     }
 
     fun cancel() {
+        if (dragging) sink.mouseUp()
         sink.cancel()
         reset()
     }
@@ -105,5 +131,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         start = emptyMap()
         maxFingers = 0
         moved = false
+        dragging = false
+        doubleTapDragCandidate = false
     }
 }

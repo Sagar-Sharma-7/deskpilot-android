@@ -2,6 +2,7 @@ package com.deskpilot
 
 import android.app.Application
 import android.os.Build
+import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,7 +14,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink {
-    enum class HapticCue { CLICK, DOUBLE_CLICK, DRAG_START, SHORTCUT }
+    enum class HapticCue { CLICK, DOUBLE_CLICK, DRAG_START, SHORTCUT, SCROLL }
     private val repository = SettingsRepository(app)
     private val hid = (app as DeskPilotApplication).hidDeviceManager
     val connection: StateFlow<ConnectionState> = hid.state
@@ -24,6 +25,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     val dragLocked: StateFlow<Boolean> = _dragLocked.asStateFlow()
     private val _hapticEvents = MutableSharedFlow<HapticCue>(extraBufferCapacity = 4)
     val hapticEvents = _hapticEvents.asSharedFlow()
+    private var lastScrollHapticAt = 0L
     private val actions = ActionRegistry(hid, ::togglePrecision, ::toggleDragLock)
     val gestures = GestureEngine(this)
 
@@ -44,10 +46,12 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     fun setVolumeShortcuts(enabled: Boolean) = viewModelScope.launch { repository.setVolumeEnabled(enabled) }
     fun setVolumeAction(up: Boolean, action: DeskAction) = viewModelScope.launch { repository.setVolumeAction(up, action) }
     fun setPointerSpeed(speed: Float) = viewModelScope.launch { repository.setPointerSpeed(speed) }
+    fun setScrollSpeed(speed: Float) = viewModelScope.launch { repository.setScrollSpeed(speed) }
     fun setNaturalScroll(natural: Boolean) = viewModelScope.launch { repository.setNaturalScroll(natural) }
     fun setDark(dark: Boolean) = viewModelScope.launch { repository.setDark(dark) }
     fun setExtremeDark(enabled: Boolean) = viewModelScope.launch { repository.setExtremeDark(enabled) }
     fun setHaptics(enabled: Boolean) = viewModelScope.launch { repository.setHaptics(enabled) }
+    fun setScrollHaptics(enabled: Boolean) = viewModelScope.launch { repository.setScrollHaptics(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
         hid.setButton(button, down)
@@ -69,7 +73,16 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         haptic(if (enabled) HapticCue.DRAG_START else HapticCue.CLICK)
     }
     override fun move(dx: Float, dy: Float) { val (x, y) = pointer.move(dx, dy); if (x != 0 || y != 0) hid.move(x, y) }
-    override fun scroll(dx: Float, dy: Float) { val (v, h) = scroll.scroll(dx, dy, settings.value.naturalScroll); if (v != 0 || h != 0) hid.scroll(v, h) }
+    override fun scroll(dx: Float, dy: Float) {
+        val (v, h) = scroll.scroll(dx, dy, settings.value.naturalScroll)
+        if (v == 0 && h == 0) return
+        hid.scroll(v, h)
+        val now = SystemClock.uptimeMillis()
+        if (settings.value.haptics && settings.value.scrollHaptics && now - lastScrollHapticAt >= SCROLL_HAPTIC_INTERVAL_MS) {
+            lastScrollHapticAt = now
+            _hapticEvents.tryEmit(HapticCue.SCROLL)
+        }
+    }
     override fun finishMotion() = hid.discardPendingMotion()
     override fun mouseDown() { hid.setButton(HidReportEncoder.LEFT, true); haptic(HapticCue.DRAG_START) }
     override fun mouseUp() = hid.setButton(HidReportEncoder.LEFT, false)
@@ -85,4 +98,6 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     override fun pinch(scaleDelta: Float) { if (scaleDelta > 0f) hid.key(0x01, 0x2e) else hid.key(0x01, 0x2d) } // Ctrl +/-
     override fun cancel() = releaseInputs()
     private fun haptic(cue: HapticCue) { if (settings.value.haptics) _hapticEvents.tryEmit(cue) }
+
+    private companion object { const val SCROLL_HAPTIC_INTERVAL_MS = 45L }
 }

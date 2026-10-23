@@ -80,6 +80,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                 DeskPilotViewModel.HapticCue.DOUBLE_CLICK -> android.view.HapticFeedbackConstants.CONFIRM
                 DeskPilotViewModel.HapticCue.DRAG_START -> android.view.HapticFeedbackConstants.LONG_PRESS
                 DeskPilotViewModel.HapticCue.SHORTCUT -> android.view.HapticFeedbackConstants.KEYBOARD_TAP
+                DeskPilotViewModel.HapticCue.SCROLL -> android.view.HapticFeedbackConstants.CLOCK_TICK
             }
             view.performHapticFeedback(effect)
         }
@@ -203,12 +204,15 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Text("Pointer speed ${(settings.pointerSpeed * 100).toInt()}%")
         Slider(settings.pointerSpeed, { model.setPointerSpeed(it) }, valueRange = .35f..2.4f)
         SettingsHeader("Scrolling")
+        Text("Scroll speed ${(settings.scrollSpeed * 100).toInt()}%")
+        Slider(settings.scrollSpeed, { model.setScrollSpeed(it) }, valueRange = .02f.. .16f)
         SettingToggle("Natural scrolling", "Move content with your fingers", settings.naturalScroll, model::setNaturalScroll)
         SettingsHeader("Appearance")
         SettingToggle("Dark theme", "", settings.darkTheme, model::setDark)
         SettingToggle("Extreme dark mode", "Pure-black low-brightness trackpad; Settings stay readable", settings.extremeDark, model::setExtremeDark)
         SettingToggle("Keep display awake", "Required while using the interactive trackpad", settings.keepAwake, model::setKeepAwake)
-        SettingToggle("Haptics", "Clicks and shortcuts only", settings.haptics, model::setHaptics)
+        SettingToggle("Haptics", "Clicks, drags, and scrolling", settings.haptics, model::setHaptics)
+        SettingToggle("Scroll haptics", "A subtle tick while scrolling", settings.scrollHaptics, model::setScrollHaptics)
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
 }
