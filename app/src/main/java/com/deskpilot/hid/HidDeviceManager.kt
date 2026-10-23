@@ -83,7 +83,13 @@ class HidDeviceManager(private val context: Context) {
                     reconnectAfterClose = null
                     if (reconnect != null && state == BluetoothProfile.STATE_DISCONNECTED && registered) {
                         _state.value = ConnectionState.Connecting(reconnect.name ?: reconnect.address)
-                        if (hid?.connect(reconnect) != true) _state.value = ConnectionState.Ready
+                        val restarted = try {
+                            hid?.connect(reconnect) == true
+                        } catch (error: RuntimeException) {
+                            Log.e(TAG, "Could not reconnect Bluetooth HID", error)
+                            false
+                        }
+                        if (!restarted) _state.value = ConnectionState.Ready
                     } else {
                         _state.value = if (registered) ConnectionState.Ready else ConnectionState.Error("Bluetooth HID disconnected")
                     }
@@ -143,7 +149,11 @@ class HidDeviceManager(private val context: Context) {
     private val serviceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
             profileRequestGeneration++
-            hid = proxy as BluetoothHidDevice
+            hid = proxy as? BluetoothHidDevice
+            if (hid == null) {
+                _state.value = ConnectionState.Error("This phone returned an invalid Bluetooth HID service.")
+                return
+            }
             register()
         }
         override fun onServiceDisconnected(profile: Int) {
@@ -165,7 +175,16 @@ class HidDeviceManager(private val context: Context) {
         }
         _state.value = ConnectionState.Registering
         val generation = ++profileRequestGeneration
-        if (!adapter.getProfileProxy(context, serviceListener, BluetoothProfile.HID_DEVICE)) {
+        val requested = try {
+            adapter.getProfileProxy(context, serviceListener, BluetoothProfile.HID_DEVICE)
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not open Bluetooth HID", error)
+            return
+        }
+        if (!requested) {
             _state.value = ConnectionState.Unsupported
             return
         }
@@ -182,10 +201,18 @@ class HidDeviceManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     private fun register() {
-        val ok = hid?.registerApp(
-            BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_MOUSE, HidDescriptor.bytes),
-            null, null, executor, callback
-        ) == true
+        val ok = try {
+            hid?.registerApp(
+                BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_MOUSE, HidDescriptor.bytes),
+                null, null, executor, callback
+            ) == true
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Bluetooth permission was revoked", error)
+            return
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not register Bluetooth HID", error)
+            return
+        }
         if (!ok) _state.value = ConnectionState.Error("Could not register the Bluetooth HID device")
     }
 
@@ -236,12 +263,23 @@ class HidDeviceManager(private val context: Context) {
 
     /** Makes a stale virtual-cable connection visible instead of silently dropping input. */
     private fun sendNow(device: BluetoothDevice, reportId: Int, data: ByteArray) {
-        if (hid?.sendReport(device, reportId, data) == true) return
+        val accepted = try {
+            hid?.sendReport(device, reportId, data) == true
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone rejected the HID input report", error)
+            return
+        }
+        if (accepted) return
         Log.w(TAG, "HID input report was rejected for ${device.address}")
         _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
     }
     @SuppressLint("MissingPermission")
-    fun rememberedDevices(): List<BluetoothDevice> = adapter?.bondedDevices?.toList().orEmpty()
+    fun rememberedDevices(): List<BluetoothDevice> = try {
+        adapter?.bondedDevices?.toList().orEmpty()
+    } catch (error: SecurityException) {
+        reportBluetoothFailure("Nearby devices permission is required", error)
+        emptyList()
+    }
     /** Requests a HID connection to an already-paired Windows host. Actual state comes from the callback. */
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice): Boolean {
@@ -250,14 +288,31 @@ class HidDeviceManager(private val context: Context) {
             _state.value = ConnectionState.Error("Enable DeskPilot Bluetooth before connecting")
             return false
         }
-        if (service.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED) {
+        val connectionState = try {
+            service.getConnectionState(device)
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return false
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not inspect the HID connection", error)
+            return false
+        }
+        if (connectionState == BluetoothProfile.STATE_CONNECTED) {
             host = device
             _state.value = ConnectionState.Connected(device.name ?: device.address)
             return true
         }
         rememberHost(device)
         _state.value = ConnectionState.Connecting(device.name ?: device.address)
-        val accepted = service.connect(device)
+        val accepted = try {
+            service.connect(device)
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return false
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not start the HID connection", error)
+            return false
+        }
         if (!accepted) _state.value = ConnectionState.Error("Windows rejected the HID connection request. Remove the old pairing and pair DeskPilot again.")
         return accepted
     }
@@ -274,10 +329,18 @@ class HidDeviceManager(private val context: Context) {
         _state.value = ConnectionState.Connecting(device.name ?: device.address)
         // Do not begin the new virtual cable until Android confirms the old one is
         // closed. Starting both at once races Windows' HID stack.
-        val accepted = if (host?.address == device.address) {
-            reconnectAfterClose = device
-            service.disconnect(device)
-        } else service.connect(device)
+        val accepted = try {
+            if (host?.address == device.address) {
+                reconnectAfterClose = device
+                service.disconnect(device)
+            } else service.connect(device)
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            return false
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not restart the HID connection", error)
+            return false
+        }
         if (!accepted) {
             _state.value = ConnectionState.Error("Could not restart the HID connection. Turn Bluetooth off and on once on Windows, then tap Reconnect.")
         }
@@ -287,7 +350,12 @@ class HidDeviceManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun lastRememberedHost(): BluetoothDevice? {
         val address = connectionPrefs.getString(LAST_HOST_ADDRESS, null) ?: return null
-        return adapter?.bondedDevices?.firstOrNull { it.address == address }
+        return try {
+            adapter?.bondedDevices?.firstOrNull { it.address == address }
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            null
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -312,6 +380,12 @@ class HidDeviceManager(private val context: Context) {
     }
 
     private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
+
+    private fun reportBluetoothFailure(message: String, error: Exception) {
+        Log.e(TAG, message, error)
+        _state.value = ConnectionState.Error("$message. Check Bluetooth permissions and try again.")
+    }
+
     private fun clearQueuedMotion() {
         reportHandler.removeCallbacksAndMessages(null)
         flushScheduled = false
