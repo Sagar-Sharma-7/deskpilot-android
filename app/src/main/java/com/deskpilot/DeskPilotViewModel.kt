@@ -20,7 +20,8 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     val settings: StateFlow<DeskSettings> = repository.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DeskSettings())
     private val pointer = PointerEngine()
     private val scroll = ScrollEngine()
-    private var dragLocked = false
+    private val _dragLocked = MutableStateFlow(false)
+    val dragLocked: StateFlow<Boolean> = _dragLocked.asStateFlow()
     private val _hapticEvents = MutableSharedFlow<HapticCue>(extraBufferCapacity = 4)
     val hapticEvents = _hapticEvents.asSharedFlow()
     private val actions = ActionRegistry(hid, ::togglePrecision, ::toggleDragLock)
@@ -32,7 +33,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         hid.start(allowed)
     }
     fun close() { hid.stop(); HidForegroundService.stop(getApplication()) }
-    fun releaseInputs() { dragLocked = false; hid.releaseAll(); pointer.reset(); scroll.reset() }
+    fun releaseInputs() { _dragLocked.value = false; hid.releaseAll(); pointer.reset(); scroll.reset() }
     fun execute(action: DeskAction) {
         actions.execute(action)
         if (action != DeskAction.NO_ACTION) haptic(HapticCue.SHORTCUT)
@@ -61,7 +62,12 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         return true // consume key up too so Android does not change phone volume
     }
     private fun togglePrecision() { pointer.precisionMode = !pointer.precisionMode }
-    private fun toggleDragLock() { dragLocked = !dragLocked; hid.setButton(HidReportEncoder.LEFT, dragLocked) }
+    fun toggleDragLock() {
+        val enabled = !_dragLocked.value
+        _dragLocked.value = enabled
+        hid.setButton(HidReportEncoder.LEFT, enabled)
+        haptic(if (enabled) HapticCue.DRAG_START else HapticCue.CLICK)
+    }
     override fun move(dx: Float, dy: Float) { val (x, y) = pointer.move(dx, dy); if (x != 0 || y != 0) hid.move(x, y) }
     override fun scroll(dx: Float, dy: Float) { val (v, h) = scroll.scroll(dx, dy, settings.value.naturalScroll); if (v != 0 || h != 0) hid.scroll(v, h) }
     override fun finishMotion() = hid.discardPendingMotion()

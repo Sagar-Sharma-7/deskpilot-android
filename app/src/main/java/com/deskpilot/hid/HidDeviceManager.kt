@@ -220,7 +220,14 @@ class HidDeviceManager(private val context: Context) {
         buttons = if (down) buttons or button else buttons and button.inv()
         mouse(0, 0, immediate = true)
     }
-    fun click(button: Int) { setButton(button, true); setButton(button, false) }
+    /**
+     * A back-to-back press/release can be collapsed by Windows' Bluetooth HID
+     * path. Keep a tap pressed briefly so it is observed as a real click.
+     */
+    fun click(button: Int) {
+        setButton(button, true)
+        reportHandler.postDelayed({ setButton(button, false) }, CLICK_HOLD_MS)
+    }
     fun releaseAll() {
         buttons = 0
         mouse(0, 0, immediate = true)
@@ -265,7 +272,7 @@ class HidDeviceManager(private val context: Context) {
         _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
     }
 
-    /** A final lift is allowed to flush the small baseline queue normally. */
+    /** The stable profile flushes the short mouse queue in report order. */
     fun discardPendingMotion() = Unit
     @SuppressLint("MissingPermission")
     fun rememberedDevices(): List<BluetoothDevice> = try {
@@ -369,6 +376,7 @@ class HidDeviceManager(private val context: Context) {
         const val LAST_HOST_ADDRESS = "last_host_address"
         const val TAG = "DeskPilotHid"
         const val MIN_REPORT_INTERVAL_MS = 8L
+        const val CLICK_HOLD_MS = 28L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
     }
 

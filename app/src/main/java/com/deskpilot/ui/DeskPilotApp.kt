@@ -137,14 +137,19 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 }
 
 @Composable private fun MouseButtons(model: DeskPilotViewModel, leftHanded: Boolean) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (leftHanded) {
-            HoldButton("Right click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.RIGHT, true) }, { model.setMouseButton(HidReportEncoder.RIGHT, false) })
-            HoldButton("Left click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.LEFT, true) }, { model.setMouseButton(HidReportEncoder.LEFT, false) })
-        } else {
-            HoldButton("Left click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.LEFT, true) }, { model.setMouseButton(HidReportEncoder.LEFT, false) })
-            HoldButton("Right click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.RIGHT, true) }, { model.setMouseButton(HidReportEncoder.RIGHT, false) })
+    val dragLocked by model.dragLocked.collectAsState()
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (leftHanded) {
+                HoldButton("Right click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.RIGHT, true) }, { model.setMouseButton(HidReportEncoder.RIGHT, false) })
+                HoldButton("Left click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.LEFT, true) }, { model.setMouseButton(HidReportEncoder.LEFT, false) })
+            } else {
+                HoldButton("Left click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.LEFT, true) }, { model.setMouseButton(HidReportEncoder.LEFT, false) })
+                HoldButton("Right click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.RIGHT, true) }, { model.setMouseButton(HidReportEncoder.RIGHT, false) })
+            }
         }
+        Spacer(Modifier.height(6.dp))
+        AssistChip(onClick = model::toggleDragLock, label = { Text(if (dragLocked) "Release drag" else "Drag lock") })
     }
 }
 
