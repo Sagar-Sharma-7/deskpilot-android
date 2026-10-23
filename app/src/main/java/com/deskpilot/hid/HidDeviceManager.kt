@@ -3,6 +3,7 @@ package com.deskpilot.hid
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ class HidDeviceManager(private val context: Context) {
     private var host: BluetoothDevice? = null
     private var buttons = 0
     private var registered = false
+    private val connectionPrefs: SharedPreferences = context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
     val state: StateFlow<ConnectionState> = _state
     private val executor: Executor = context.mainExecutor
@@ -34,13 +36,25 @@ class HidDeviceManager(private val context: Context) {
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             this@HidDeviceManager.registered = registered
-            _state.value = if (registered) ConnectionState.Ready else ConnectionState.Error("DeskPilot is no longer registered as a Bluetooth HID device")
+            if (!registered) {
+                _state.value = ConnectionState.Error("DeskPilot is no longer registered as a Bluetooth HID device")
+                return
+            }
+            if (pluggedDevice != null) {
+                host = pluggedDevice
+                rememberHost(pluggedDevice)
+                _state.value = ConnectionState.Connected(pluggedDevice.name ?: pluggedDevice.address)
+            } else {
+                _state.value = ConnectionState.Ready
+                reconnectLastHost()
+            }
         }
         override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
             when (state) {
                 BluetoothProfile.STATE_CONNECTING -> _state.value = ConnectionState.Connecting(device.name ?: device.address)
                 BluetoothProfile.STATE_CONNECTED -> {
                     host = device
+                    rememberHost(device)
                     _state.value = ConnectionState.Connected(device.name ?: device.address)
                 }
                 BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> if (host?.address == device.address || _state.value is ConnectionState.Connecting) {
@@ -71,7 +85,7 @@ class HidDeviceManager(private val context: Context) {
         if (!hasPermissions) { _state.value = ConnectionState.PermissionRequired; return }
         if (adapter == null || !adapter.isEnabled) { _state.value = ConnectionState.Error("Turn on Bluetooth to use DeskPilot"); return }
         if (hid != null) {
-            if (!registered) register()
+            if (!registered) register() else if (host == null) reconnectLastHost()
             return
         }
         _state.value = ConnectionState.Registering
@@ -119,9 +133,24 @@ class HidDeviceManager(private val context: Context) {
             _state.value = ConnectionState.Error("Enable DeskPilot Bluetooth before connecting")
             return false
         }
+        rememberHost(device)
         val accepted = service.connect(device)
         if (!accepted) _state.value = ConnectionState.Error("Windows rejected the HID connection request. Remove the old pairing and pair DeskPilot again.")
         return accepted
+    }
+
+    /** Reconnects only to the computer the user previously selected—never an arbitrary paired device. */
+    @SuppressLint("MissingPermission")
+    private fun reconnectLastHost() {
+        if (!registered || host != null) return
+        val address = connectionPrefs.getString(LAST_HOST_ADDRESS, null) ?: return
+        val rememberedHost = adapter?.bondedDevices?.firstOrNull { it.address == address } ?: return
+        hid?.connect(rememberedHost)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun rememberHost(device: BluetoothDevice) {
+        connectionPrefs.edit().putString(LAST_HOST_ADDRESS, device.address).apply()
     }
     @SuppressLint("MissingPermission")
     fun stop() {
@@ -130,4 +159,6 @@ class HidDeviceManager(private val context: Context) {
         hid?.let { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, it) }
         hid = null
     }
+
+    private companion object { const val LAST_HOST_ADDRESS = "last_host_address" }
 }

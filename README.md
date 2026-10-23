@@ -18,6 +18,8 @@ From a terminal with Gradle available, run `gradle :app:assembleDebug`. The proj
 4. Select the phone using its normal Bluetooth name (for example, *Sagar's S23*), not necessarily *DeskPilot*. Approve the pairing confirmation on both devices. DeskPilot is the HID service the phone exposes after pairing.
 4. Return to DeskPilot's **Connection** screen and press **Connect** beside the remembered Galaxy Book. It will show *Connected* only after Android receives the HID connection callback.
 
+DeskPilot remembers the computer selected with **Connect** and automatically requests its HID connection the next time DeskPilot becomes ready. You should not need to remove the phone from Windows Bluetooth devices to reconnect. If Windows has an old, failed pairing from before this version, remove it once on both devices and complete the pairing flow again.
+
 DeskPilot can also initiate a connection to the paired Windows HID host. Keep its persistent "DeskPilot is ready" notification active while pairing or connecting; Android automatically unregisters HID-device apps that are no longer foreground. If Windows retains a stale pairing, remove *DeskPilot* from Windows Bluetooth devices, forget the Galaxy Book from Android Bluetooth settings, then pair once more.
 
 ## Controls
