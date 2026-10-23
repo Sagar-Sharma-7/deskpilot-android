@@ -4,6 +4,8 @@ import android.content.Intent
 import android.provider.Settings
 import android.view.MotionEvent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -135,7 +137,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 @Composable private fun ConnectScreen(model: DeskPilotViewModel, back: () -> Unit, request: () -> Unit, makeDiscoverable: () -> Unit) {
     val state by model.connection.collectAsState()
     val context = LocalContext.current
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(24.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(24.dp)) {
         TextButton(onClick = back) { Text("← Back") }
         Text("Connection", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(12.dp)); Text(when (state) { is ConnectionState.Connected -> "Connected to ${(state as ConnectionState.Connected).name}"; is ConnectionState.Connecting -> "Connecting to ${(state as ConnectionState.Connecting).name}…"; is ConnectionState.Error -> (state as ConnectionState.Error).message; ConnectionState.PermissionRequired -> "Nearby devices permission is needed"; ConnectionState.Unsupported -> "This Android version does not support Bluetooth HID device mode"; ConnectionState.Registering -> "Registering DeskPilot as a Bluetooth mouse…"; else -> "Ready to pair" })
