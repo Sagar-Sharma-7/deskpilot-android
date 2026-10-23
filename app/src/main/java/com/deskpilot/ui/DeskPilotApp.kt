@@ -137,7 +137,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 }
 
 @Composable private fun MouseButtons(model: DeskPilotViewModel, leftHanded: Boolean) {
-    val dragLocked by model.dragLocked.collectAsState()
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (leftHanded) {
@@ -147,11 +146,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                 HoldButton("Left click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.LEFT, true) }, { model.setMouseButton(HidReportEncoder.LEFT, false) })
                 HoldButton("Right click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.RIGHT, true) }, { model.setMouseButton(HidReportEncoder.RIGHT, false) })
             }
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(onClick = model::toggleDragLock, label = { Text(if (dragLocked) "Release drag" else "Drag lock") })
-            AssistChip(onClick = model::releaseInputs, label = { Text("Release all") })
         }
     }
 }
@@ -177,17 +171,17 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(20.dp)); Button(onClick = request, enabled = !bluetoothReady) {
             Text(if (bluetoothReady) "DeskPilot Bluetooth is ready" else "Enable DeskPilot Bluetooth")
         }
-        if (state is ConnectionState.Connected || state is ConnectionState.Error) {
+        if (state is ConnectionState.Connected || state is ConnectionState.Connecting || state is ConnectionState.Error) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = model::reconnect, enabled = bluetoothReady || state is ConnectionState.Error) {
-                Text("Rebuild mouse input")
+                Text("Reconnect mouse input")
             }
         }
         Spacer(Modifier.height(8.dp)); OutlinedButton(onClick = makeDiscoverable, enabled = bluetoothReady) { Text("Make phone discoverable for 5 minutes") }
         Spacer(Modifier.height(16.dp)); OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) { Text("Open Bluetooth settings") }
         Spacer(Modifier.height(24.dp)); Text("First-time pairing", fontWeight = FontWeight.SemiBold)
         Text("1. For the first pairing only: tap Make phone discoverable and approve Android's prompt.\n2. On Windows 11: Settings → Bluetooth & devices → Add device → Bluetooth. Select this phone by its normal Bluetooth name and approve the code on both devices.\n3. Return here and tap Connect beside the Galaxy Book. Do not use Windows' generic Connect button as the mouse connection; wait for this screen to say HID mouse connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp)); Text("Stability mouse mode is active: pointer, click, and drag are enabled. Scrolling and keyboard gestures are paused until mouse input is proven reliable. Remove the old Windows pairing and pair once so Windows reads this simpler HID profile.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp)); Text("Simple trackpad mode: one finger moves/taps, two fingers scroll, and a two-finger tap right-clicks. DeskPilot now uses one fixed mouse profile. Because this update changes that profile, remove the old Windows pairing and pair once after installing this version.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         val devices = model.rememberedDevices()
         if (devices.isNotEmpty()) {
             Spacer(Modifier.height(20.dp)); Text("Remembered devices", fontWeight = FontWeight.SemiBold)
