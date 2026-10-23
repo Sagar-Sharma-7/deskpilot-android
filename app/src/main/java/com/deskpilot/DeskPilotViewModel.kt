@@ -118,7 +118,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
 
     private companion object {
         const val SCROLL_HAPTIC_INTERVAL_MS = 45L
-        const val PINCH_STEP = .16f
+        const val PINCH_STEP = .10f
         const val HID_LEFT_CONTROL = 0x01
         const val HID_MINUS = 0x2D
         const val HID_EQUAL = 0x2E

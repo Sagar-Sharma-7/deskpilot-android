@@ -99,6 +99,17 @@ class InputEnginesTest {
         engine.down(TouchPoint(1, 50f, 100f), 0)
         engine.down(TouchPoint(2, 150f, 100f), 1)
         engine.move(listOf(TouchPoint(1, 10f, 100f), TouchPoint(2, 190f, 100f)), 30)
+        engine.move(listOf(TouchPoint(1, 0f, 100f), TouchPoint(2, 200f, 100f)), 45)
+        assertTrue(sink.pinches.isNotEmpty())
+        assertTrue(sink.scrolls.isEmpty())
+    }
+
+    @Test fun `pinch with a small center drift never becomes scroll`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 50f, 100f), 0)
+        engine.down(TouchPoint(2, 150f, 100f), 1)
+        engine.move(listOf(TouchPoint(1, 30f, 110f), TouchPoint(2, 170f, 110f)), 30)
+        engine.move(listOf(TouchPoint(1, 20f, 115f), TouchPoint(2, 180f, 115f)), 45)
         assertTrue(sink.pinches.isNotEmpty())
         assertTrue(sink.scrolls.isEmpty())
     }

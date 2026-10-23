@@ -1,7 +1,7 @@
 package com.deskpilot.input
 
-import kotlin.math.hypot
 import kotlin.math.abs
+import kotlin.math.hypot
 
 data class TouchPoint(val id: Int, val x: Float, val y: Float)
 
@@ -42,6 +42,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     private var dragging = false
     private var twoFingerMode = TwoFingerMode.UNDECIDED
     private var twoFingerStartDistance = 0f
+    private var twoFingerLastPinchDistance = 0f
     private var twoFingerStartCenter = 0f to 0f
 
     private enum class TwoFingerMode { UNDECIDED, SCROLL, PINCH }
@@ -67,6 +68,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
             doubleTapDragCandidate = false
             if (points.size == 2) {
                 twoFingerStartDistance = distanceBetweenFirstTwo()
+                twoFingerLastPinchDistance = twoFingerStartDistance
                 twoFingerStartCenter = center()
                 twoFingerMode = TwoFingerMode.UNDECIDED
             }
@@ -99,11 +101,26 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                 val distance = hypot((first.x - second.x).toDouble(), (first.y - second.y).toDouble()).toFloat()
                 val centerTravel = distanceBetween(center(), twoFingerStartCenter)
                 val separationTravel = abs(distance - twoFingerStartDistance)
+                val firstDx = first.x - oldFirst.x
+                val firstDy = first.y - oldFirst.y
+                val secondDx = second.x - oldSecond.x
+                val secondDy = second.y - oldSecond.y
+                val fingerMotionDot = firstDx * secondDx + firstDy * secondDy
                 if (twoFingerMode == TwoFingerMode.UNDECIDED) {
                     twoFingerMode = when {
-                        separationTravel >= PINCH_ACTIVATION_SLOP && separationTravel > centerTravel * 1.75f -> TwoFingerMode.PINCH
-                        centerTravel >= SCROLL_ACTIVATION_SLOP -> TwoFingerMode.SCROLL
+                        // Fingers moving in opposite directions are a reliable pinch signal,
+                        // even if the centre drifts slightly on a real screen.
+                        fingerMotionDot < 0f && separationTravel >= PINCH_ACTIVATION_SLOP &&
+                            separationTravel > centerTravel * PINCH_CENTER_DRIFT_RATIO -> TwoFingerMode.PINCH
+                        centerTravel >= SCROLL_ACTIVATION_SLOP &&
+                            (fingerMotionDot >= 0f || centerTravel > separationTravel * SCROLL_SEPARATION_RATIO) -> TwoFingerMode.SCROLL
                         else -> TwoFingerMode.UNDECIDED
+                    }
+                    // Do not turn the activation movement into several zoom shortcuts.
+                    // Starting from this frame gives a steady stream of small zoom steps.
+                    if (twoFingerMode == TwoFingerMode.PINCH) {
+                        twoFingerLastPinchDistance = distance
+                        moved = true
                     }
                 }
                 when (twoFingerMode) {
@@ -112,11 +129,11 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                         sink.scroll(dx, dy)
                     }
                     TwoFingerMode.PINCH -> {
-                        val distanceChange = distance - twoFingerStartDistance
+                        val distanceChange = distance - twoFingerLastPinchDistance
                         if (distanceChange != 0f) {
                             moved = true
                             sink.pinch(distanceChange / PINCH_DISTANCE_SCALE)
-                            twoFingerStartDistance = distance
+                            twoFingerLastPinchDistance = distance
                         }
                     }
                     TwoFingerMode.UNDECIDED -> Unit
@@ -167,6 +184,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         doubleTapDragCandidate = false
         twoFingerMode = TwoFingerMode.UNDECIDED
         twoFingerStartDistance = 0f
+        twoFingerLastPinchDistance = 0f
     }
 
     private fun distanceBetweenFirstTwo(): Float = points.values.take(2).let { values ->
@@ -181,8 +199,10 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         hypot((first.first - second.first).toDouble(), (first.second - second.second).toDouble()).toFloat()
 
     private companion object {
-        const val SCROLL_ACTIVATION_SLOP = 10f
-        const val PINCH_ACTIVATION_SLOP = 42f
+        const val SCROLL_ACTIVATION_SLOP = 14f
+        const val PINCH_ACTIVATION_SLOP = 16f
         const val PINCH_DISTANCE_SCALE = 100f
+        const val PINCH_CENTER_DRIFT_RATIO = .6f
+        const val SCROLL_SEPARATION_RATIO = 1.4f
     }
 }
