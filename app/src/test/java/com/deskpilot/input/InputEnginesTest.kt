@@ -5,6 +5,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InputEnginesTest {
+
+    @Test fun `boot mouse report is a three byte no-report-id packet`() {
+        assertArrayEquals(byteArrayOf(0x07, 12, (-9).toByte()), HidReportEncoder.bootMouse(0x1f, 12, -9))
+    }
     @Test fun `pointer retains subpixel movement until a HID integer exists`() {
         val engine = PointerEngine(PointerTuning(sensitivity = 1f, acceleration = false))
         assertEquals(0 to 0, engine.move(.4f, .4f))

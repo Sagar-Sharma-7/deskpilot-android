@@ -16,6 +16,11 @@ object HidReportEncoder {
         clamp(wheel).toByte(), clamp(pan).toByte()
     )
 
+    /** USB/Bluetooth HID boot mouse packet: no report ID, no scroll axes. */
+    fun bootMouse(buttons: Int, dx: Int, dy: Int): ByteArray = byteArrayOf(
+        (buttons and 0x07).toByte(), clamp(dx).toByte(), clamp(dy).toByte()
+    )
+
     fun keyboard(modifiers: Int, vararg keys: Int): ByteArray {
         val report = ByteArray(8)
         report[0] = modifiers.toByte()
