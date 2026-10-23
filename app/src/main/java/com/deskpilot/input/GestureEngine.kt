@@ -57,6 +57,12 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                 twoFingerStartDistance = pinchDistance
                 twoFingerStartCenter = centroid()
                 twoFingerMode = TwoFingerMode.UNDECIDED
+            } else if (points.size >= 3) {
+                // A multi-finger swipe starts when the final finger lands, not
+                // at the first one-finger contact. This removes an artificial
+                // sideways component from an otherwise vertical swipe.
+                gestureOrigin = centroid()
+                latestCentroid = gestureOrigin
             }
         }
     }

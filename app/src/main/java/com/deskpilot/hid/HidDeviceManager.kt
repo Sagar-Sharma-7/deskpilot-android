@@ -36,6 +36,8 @@ class HidDeviceManager(private val context: Context) {
     private var reconnectAfterClose: BluetoothDevice? = null
     private var queuedDx = 0
     private var queuedDy = 0
+    private var queuedWheel = 0
+    private var queuedPan = 0
     private var flushScheduled = false
     private var lastReportAtMs = 0L
     private val reportHandler = Handler(Looper.getMainLooper())
@@ -97,10 +99,6 @@ class HidDeviceManager(private val context: Context) {
             }
         }
 
-        /**
-         * DeskPilot's baseline descriptor is boot compatible in both protocol
-         * modes, so both Windows paths use the same report-ID-zero packet.
-         */
         override fun onSetProtocol(device: BluetoothDevice, protocol: Byte) {
             val currentHost = host
             if (currentHost != null && currentHost.address != device.address) return
@@ -116,7 +114,9 @@ class HidDeviceManager(private val context: Context) {
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
             Log.i(TAG, "HID GET_REPORT type=$type id=$id size=$bufferSize from ${device.address}")
             val report = when (id.toInt()) {
-                0 -> HidReportEncoder.mouse(buttons, 0, 0)
+                HidReportEncoder.MOUSE_REPORT_ID -> HidReportEncoder.mouse(buttons, 0, 0)
+                HidReportEncoder.KEYBOARD_REPORT_ID -> HidReportEncoder.keyboard(0)
+                0 -> if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) HidReportEncoder.bootMouse(buttons, 0, 0) else null
                 else -> null
             }
             if (report == null) {
@@ -203,7 +203,7 @@ class HidDeviceManager(private val context: Context) {
     private fun register() {
         val ok = try {
             hid?.registerApp(
-                BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_MOUSE, HidDescriptor.bytes),
+                BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_COMBO, HidDescriptor.bytes),
                 null, null, executor, callback
             ) == true
         } catch (error: SecurityException) {
@@ -217,14 +217,7 @@ class HidDeviceManager(private val context: Context) {
     }
 
     fun move(dx: Int, dy: Int) = mouse(dx, dy)
-    /**
-     * Scrolling is deliberately disabled while DeskPilot establishes a reliable
-     * boot-mouse connection.  A wheel axis changes the descriptor and caused the
-     * Windows HID driver to fail on the affected laptop.
-     */
-    fun scroll(vertical: Int, horizontal: Int) {
-        if (vertical != 0 || horizontal != 0) Log.d(TAG, "Scroll ignored in boot-mouse baseline")
-    }
+    fun scroll(vertical: Int, horizontal: Int) = mouse(0, 0, vertical, horizontal)
     fun setButton(button: Int, down: Boolean) {
         buttons = if (down) buttons or button else buttons and button.inv()
         mouse(0, 0, immediate = true)
@@ -233,14 +226,26 @@ class HidDeviceManager(private val context: Context) {
     fun releaseAll() {
         buttons = 0
         mouse(0, 0, immediate = true)
+        key(0)
     }
     fun key(modifiers: Int, vararg keys: Int) {
-        Log.i(TAG, "Keyboard shortcut ignored in mouse compatibility mode")
+        val currentHost = host ?: return
+        // Boot protocol has an untagged mouse packet. It cannot safely carry a
+        // second, untagged keyboard packet from this combined device, so retain
+        // the known-good pointer path until the host switches back to report mode.
+        if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
+            Log.i(TAG, "Keyboard shortcut skipped while host is in boot protocol")
+            return
+        }
+        sendNow(currentHost, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(modifiers, *keys))
+        sendNow(currentHost, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(0))
     }
-    private fun mouse(dx: Int, dy: Int, immediate: Boolean = false) {
+    private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0, immediate: Boolean = false) {
         if (host == null) return
         queuedDx += dx
         queuedDy += dy
+        queuedWheel += wheel
+        queuedPan += pan
         if (immediate) {
             flushMotion()
             return
@@ -256,9 +261,15 @@ class HidDeviceManager(private val context: Context) {
         val currentHost = host ?: run { clearQueuedMotion(); return }
         val dx = takeAxis { queuedDx }.also { queuedDx -= it }
         val dy = takeAxis { queuedDy }.also { queuedDy -= it }
-        sendNow(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy))
+        val wheel = takeAxis { queuedWheel }.also { queuedWheel -= it }
+        val pan = takeAxis { queuedPan }.also { queuedPan -= it }
+        if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
+            sendNow(currentHost, BOOT_REPORT_ID, HidReportEncoder.bootMouse(buttons, dx, dy))
+        } else {
+            sendNow(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy, wheel, pan))
+        }
         lastReportAtMs = SystemClock.uptimeMillis()
-        if (queuedDx != 0 || queuedDy != 0) mouse(0, 0)
+        if (queuedDx != 0 || queuedDy != 0 || queuedWheel != 0 || queuedPan != 0) mouse(0, 0)
     }
 
     /** Makes a stale virtual-cable connection visible instead of silently dropping input. */
@@ -391,5 +402,7 @@ class HidDeviceManager(private val context: Context) {
         flushScheduled = false
         queuedDx = 0
         queuedDy = 0
+        queuedWheel = 0
+        queuedPan = 0
     }
 }

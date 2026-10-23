@@ -1,8 +1,10 @@
 package com.deskpilot.ui
 
+import android.app.Activity
 import android.content.Intent
 import android.provider.Settings
 import android.view.MotionEvent
+import android.view.WindowManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -33,7 +35,27 @@ private enum class Screen { TRACKPAD, SETTINGS, CONNECT }
 @Composable
 fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBluetooth: () -> Unit, onRequestDiscoverable: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(Screen.TRACKPAD) }
-    MaterialTheme(colorScheme = if (settings.darkTheme) darkColorScheme() else lightColorScheme()) {
+    val view = LocalView.current
+    val activity = LocalContext.current as? Activity
+    DisposableEffect(settings.extremeDark, settings.keepAwake, activity, view) {
+        val window = activity?.window
+        val previousBrightness = window?.attributes?.screenBrightness ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        val previousKeepScreenOn = view.keepScreenOn
+        view.keepScreenOn = settings.keepAwake
+        if (settings.extremeDark && window != null) {
+            window.attributes = window.attributes.apply { screenBrightness = 0.02f }
+        }
+        onDispose {
+            view.keepScreenOn = previousKeepScreenOn
+            if (window != null) window.attributes = window.attributes.apply { screenBrightness = previousBrightness }
+        }
+    }
+    val colors = when {
+        settings.extremeDark -> extremeDarkColorScheme()
+        settings.darkTheme -> darkColorScheme()
+        else -> lightColorScheme()
+    }
+    MaterialTheme(colorScheme = colors) {
         Surface(Modifier.fillMaxSize()) {
             when (screen) {
                 Screen.TRACKPAD -> TrackpadScreen(model, settings, { screen = Screen.SETTINGS }, { screen = Screen.CONNECT })
@@ -69,7 +91,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             TextButton(onClick = openSettings) { Text("Settings") }
         }
         Spacer(Modifier.height(12.dp))
-        Touchpad(model, Modifier.weight(1f).fillMaxWidth())
+        Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
         Spacer(Modifier.height(10.dp))
         QuickActions(model)
         Spacer(Modifier.height(8.dp))
@@ -83,7 +105,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
-@Composable private fun Touchpad(model: DeskPilotViewModel, modifier: Modifier) {
+@Composable private fun Touchpad(model: DeskPilotViewModel, modifier: Modifier, extremeDark: Boolean) {
     Surface(modifier = modifier.pointerInteropFilter { event ->
         fun point(index: Int) = TouchPoint(event.getPointerId(index), event.getX(index), event.getY(index))
         when (event.actionMasked) {
@@ -93,7 +115,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             MotionEvent.ACTION_CANCEL -> model.gestures.cancel()
         }
         true
-    }, color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), tonalElevation = 1.dp) {}
+    }, color = if (extremeDark) Color(0xFF030303) else MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp), tonalElevation = if (extremeDark) 0.dp else 1.dp) {}
 }
 
 @Composable private fun QuickActions(model: DeskPilotViewModel) {
@@ -155,7 +177,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(16.dp)); OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) { Text("Open Bluetooth settings") }
         Spacer(Modifier.height(24.dp)); Text("First-time pairing", fontWeight = FontWeight.SemiBold)
         Text("1. For the first pairing only: tap Make phone discoverable and approve Android's prompt.\n2. On Windows 11: Settings → Bluetooth & devices → Add device → Bluetooth. Select this phone by its normal Bluetooth name and approve the code on both devices.\n3. Return here and tap Connect beside the Galaxy Book. Do not use Windows' generic Connect button as the mouse connection; wait for this screen to say HID mouse connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp)); Text("Boot-mouse compatibility mode is enabled while Windows validates DeskPilot. Pointer, click, and drag are available; scrolling and keyboard shortcuts return after the HID connection is proven stable.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp)); Text("Full gesture test mode is enabled: scrolling, pinch shortcuts, and three/four-finger desktop gestures are available. Pair this version as a new Bluetooth device once so Windows reads its expanded HID profile.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         val devices = model.rememberedDevices()
         if (devices.isNotEmpty()) {
             Spacer(Modifier.height(20.dp)); Text("Remembered devices", fontWeight = FontWeight.SemiBold)
@@ -171,7 +193,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 @Composable private fun SettingsScreen(model: DeskPilotViewModel, settings: DeskSettings, back: () -> Unit) {
     var chooseFor by remember { mutableStateOf<Boolean?>(null) }
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 24.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         TextButton(onClick = back) { Text("← Trackpad") }; Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         SettingsHeader("Pointer")
@@ -184,7 +206,10 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Volume up"); TextButton({ chooseFor = true }) { Text(settings.volumeUp.label) } }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Volume down"); TextButton({ chooseFor = false }) { Text(settings.volumeDown.label) } }
         SettingsHeader("Appearance")
-        SettingToggle("Dark theme", "", settings.darkTheme, model::setDark); SettingToggle("Haptics", "Clicks and shortcuts only", settings.haptics, model::setHaptics)
+        SettingToggle("Dark theme", "", settings.darkTheme, model::setDark)
+        SettingToggle("Extreme dark mode", "True black with 2% brightness while DeskPilot is open", settings.extremeDark, model::setExtremeDark)
+        SettingToggle("Keep display awake", "Required while using the interactive trackpad", settings.keepAwake, model::setKeepAwake)
+        SettingToggle("Haptics", "Clicks and shortcuts only", settings.haptics, model::setHaptics)
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
     chooseFor?.let { up -> ActionChooser(if (up) "Volume up" else "Volume down", { chooseFor = null }) { model.setVolumeAction(up, it); chooseFor = null } }
@@ -193,3 +218,15 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 @Composable private fun SettingsHeader(text: String) { Spacer(Modifier.height(20.dp)); Text(text, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
 @Composable private fun SettingToggle(title: String, subtitle: String, checked: Boolean, change: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title); if (subtitle.isNotEmpty()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked, change) } }
 @Composable private fun ActionChooser(title: String, dismiss: () -> Unit, select: (DeskAction) -> Unit) { AlertDialog(onDismissRequest = dismiss, title = { Text("$title action") }, text = { Column { DeskAction.entries.filter { it != DeskAction.DRAG_LOCK && it != DeskAction.PRECISION }.forEach { action -> Text(action.label, modifier = Modifier.fillMaxWidth().clickable { select(action) }.padding(10.dp)) } } }, confirmButton = { TextButton(dismiss) { Text("Cancel") } }) }
+
+private fun extremeDarkColorScheme() = darkColorScheme(
+    primary = Color(0xFF8AB4F8),
+    onPrimary = Color.Black,
+    surface = Color.Black,
+    onSurface = Color(0xFFE8EAED),
+    surfaceVariant = Color(0xFF050505),
+    onSurfaceVariant = Color(0xFFB8BDC5),
+    background = Color.Black,
+    onBackground = Color(0xFFE8EAED),
+    secondaryContainer = Color(0xFF080808)
+)

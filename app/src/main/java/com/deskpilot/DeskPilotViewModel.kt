@@ -45,7 +45,9 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     fun setPointerSpeed(speed: Float) = viewModelScope.launch { repository.setPointerSpeed(speed) }
     fun setNaturalScroll(natural: Boolean) = viewModelScope.launch { repository.setNaturalScroll(natural) }
     fun setDark(dark: Boolean) = viewModelScope.launch { repository.setDark(dark) }
+    fun setExtremeDark(enabled: Boolean) = viewModelScope.launch { repository.setExtremeDark(enabled) }
     fun setHaptics(enabled: Boolean) = viewModelScope.launch { repository.setHaptics(enabled) }
+    fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
         hid.setButton(button, down)
         if (down) haptic(HapticCue.CLICK)

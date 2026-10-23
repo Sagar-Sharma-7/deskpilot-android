@@ -21,7 +21,7 @@ class InputEnginesTest {
         assertEquals(0 to 1, engine.scroll(0f, 2f, natural = true))
     }
     @Test fun `mouse reports clamp HID relative ranges`() {
-        assertArrayEquals(byteArrayOf(1, 127, -127, 0), HidReportEncoder.mouse(1, 500, -900))
+        assertArrayEquals(byteArrayOf(1, 127, -127, 0, 0), HidReportEncoder.mouse(1, 500, -900))
     }
     @Test fun `double tap emits exactly two physical clicks`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
@@ -42,6 +42,19 @@ class InputEnginesTest {
         engine.move(listOf(TouchPoint(1, 20f, 100f), TouchPoint(2, 123f, 100f)), 40)
         assertTrue(sink.scrolls.isNotEmpty()); assertTrue(sink.pinches.isEmpty())
     }
+    @Test fun `intentional two-finger separation activates pinch instead of scroll`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 40f, 100f), 0); engine.down(TouchPoint(2, 160f, 100f), 1)
+        engine.move(listOf(TouchPoint(1, 15f, 100f), TouchPoint(2, 185f, 100f)), 30)
+        assertTrue(sink.pinches.isNotEmpty()); assertTrue(sink.scrolls.isEmpty())
+    }
+    @Test fun `three-finger swipe emits desktop gesture`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 30f, 120f), 0); engine.down(TouchPoint(2, 80f, 120f), 1); engine.down(TouchPoint(3, 130f, 120f), 2)
+        engine.move(listOf(TouchPoint(1, 30f, 0f), TouchPoint(2, 80f, 0f), TouchPoint(3, 130f, 0f)), 50)
+        engine.up(1, 60); engine.up(2, 70); engine.up(3, 80)
+        assertEquals(listOf(3 to (0f to -120f)), sink.swipes)
+    }
     @Test fun `cancel releases held drag`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)
         engine.down(TouchPoint(1, 0f, 0f), 0); engine.up(1, 50)
@@ -51,8 +64,8 @@ class InputEnginesTest {
 }
 
 private class RecordingSink : GestureSink {
-    val moves = mutableListOf<Pair<Float, Float>>(); val scrolls = mutableListOf<Pair<Float, Float>>(); val pinches = mutableListOf<Float>(); val clicks = mutableListOf<Pair<Int, MouseButton>>(); var downs = 0; var ups = 0
+    val moves = mutableListOf<Pair<Float, Float>>(); val scrolls = mutableListOf<Pair<Float, Float>>(); val pinches = mutableListOf<Float>(); val clicks = mutableListOf<Pair<Int, MouseButton>>(); val swipes = mutableListOf<Pair<Int, Pair<Float, Float>>>(); var downs = 0; var ups = 0
     override fun move(dx: Float, dy: Float) { moves += dx to dy }; override fun scroll(dx: Float, dy: Float) { scrolls += dx to dy }
     override fun mouseDown() { downs++ }; override fun mouseUp() { ups++ }; override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) { clicks += count to button }
-    override fun swipe(fingers: Int, dx: Float, dy: Float) = Unit; override fun pinch(scaleDelta: Float) { pinches += scaleDelta }; override fun cancel() = Unit
+    override fun swipe(fingers: Int, dx: Float, dy: Float) { swipes += fingers to (dx to dy) }; override fun pinch(scaleDelta: Float) { pinches += scaleDelta }; override fun cancel() = Unit
 }
