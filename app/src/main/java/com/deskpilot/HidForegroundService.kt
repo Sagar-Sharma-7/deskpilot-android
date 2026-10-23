@@ -15,8 +15,13 @@ import androidx.core.content.ContextCompat
 
 /** Keeps DeskPilot foreground while its Bluetooth HID registration is active. */
 class HidForegroundService : Service() {
+    // Holding this reference makes the HID callback live for the whole
+    // foreground-service lifetime, not merely while MainActivity is visible.
+    private val hidController by lazy { (application as DeskPilotApplication).hidDeviceManager }
+
     override fun onCreate() {
         super.onCreate()
+        hidController // initialise the service-owned controller before advertising readiness
         val channel = NotificationChannel(CHANNEL_ID, "DeskPilot connection", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)

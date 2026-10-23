@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink {
     enum class HapticCue { CLICK, DOUBLE_CLICK, DRAG_START, SHORTCUT }
     private val repository = SettingsRepository(app)
-    private val hid = HidDeviceManager(app)
+    private val hid = (app as DeskPilotApplication).hidDeviceManager
     val connection: StateFlow<ConnectionState> = hid.state
     val settings: StateFlow<DeskSettings> = repository.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DeskSettings())
     private val pointer = PointerEngine()

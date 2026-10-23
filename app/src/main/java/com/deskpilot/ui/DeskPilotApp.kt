@@ -155,7 +155,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(16.dp)); OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) { Text("Open Bluetooth settings") }
         Spacer(Modifier.height(24.dp)); Text("First-time pairing", fontWeight = FontWeight.SemiBold)
         Text("1. For the first pairing only: tap Make phone discoverable and approve Android's prompt.\n2. On Windows 11: Settings → Bluetooth & devices → Add device → Bluetooth. Select this phone by its normal Bluetooth name and approve the code on both devices.\n3. Return here and tap Connect beside the Galaxy Book. Do not use Windows' generic Connect button as the mouse connection; wait for this screen to say HID mouse connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp)); Text("Mouse compatibility mode is enabled for this computer. Pointer, click, drag, and vertical scroll work; keyboard shortcuts and horizontal scroll are temporarily unavailable while Windows' HID driver is repaired.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp)); Text("Boot-mouse compatibility mode is enabled while Windows validates DeskPilot. Pointer, click, and drag are available; scrolling and keyboard shortcuts return after the HID connection is proven stable.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         val devices = model.rememberedDevices()
         if (devices.isNotEmpty()) {
             Spacer(Modifier.height(20.dp)); Text("Remembered devices", fontWeight = FontWeight.SemiBold)

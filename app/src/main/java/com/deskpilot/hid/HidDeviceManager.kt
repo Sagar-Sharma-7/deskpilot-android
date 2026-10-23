@@ -5,6 +5,9 @@ import android.bluetooth.*
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,7 +31,14 @@ class HidDeviceManager(private val context: Context) {
     private var host: BluetoothDevice? = null
     private var buttons = 0
     private var registered = false
+    private var profileRequestGeneration = 0
     private var protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
+    private var reconnectAfterClose: BluetoothDevice? = null
+    private var queuedDx = 0
+    private var queuedDy = 0
+    private var flushScheduled = false
+    private var lastReportAtMs = 0L
+    private val reportHandler = Handler(Looper.getMainLooper())
     private val connectionPrefs: SharedPreferences = context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
     val state: StateFlow<ConnectionState> = _state
@@ -44,10 +54,12 @@ class HidDeviceManager(private val context: Context) {
             if (pluggedDevice != null) {
                 host = pluggedDevice
                 rememberHost(pluggedDevice)
-                _state.value = ConnectionState.Connected(pluggedDevice.name ?: pluggedDevice.address)
+                // A pluggedDevice can be left over while the host is restoring a
+                // virtual cable. Wait for the real connection callback before
+                // claiming that mouse reports are usable.
+                _state.value = ConnectionState.Connecting(pluggedDevice.name ?: pluggedDevice.address)
             } else {
                 _state.value = ConnectionState.Ready
-                reconnectLastHost()
             }
         }
         override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
@@ -58,19 +70,30 @@ class HidDeviceManager(private val context: Context) {
                     protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
                     rememberHost(device)
                     _state.value = ConnectionState.Connected(device.name ?: device.address)
+                    Log.i(TAG, "HID virtual cable opened for ${device.address}")
+                    // Give the host a known initial mouse state as soon as its
+                    // interrupt channel opens.
+                    sendNow(device, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(0, 0))
                 }
                 BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> if (host?.address == device.address || _state.value is ConnectionState.Connecting) {
                     host = null
                     buttons = 0
-                    _state.value = if (registered) ConnectionState.Ready else ConnectionState.Error("Bluetooth HID disconnected")
+                    clearQueuedMotion()
+                    val reconnect = reconnectAfterClose
+                    reconnectAfterClose = null
+                    if (reconnect != null && state == BluetoothProfile.STATE_DISCONNECTED && registered) {
+                        _state.value = ConnectionState.Connecting(reconnect.name ?: reconnect.address)
+                        if (hid?.connect(reconnect) != true) _state.value = ConnectionState.Ready
+                    } else {
+                        _state.value = if (registered) ConnectionState.Ready else ConnectionState.Error("Bluetooth HID disconnected")
+                    }
                 }
             }
         }
 
         /**
-         * A Windows host may choose HID boot mode after restoring a connection. In
-         * that mode it will ignore report-ID packets, so input must use the boot
-         * mouse/keyboard packet shape and report ID zero.
+         * DeskPilot's baseline descriptor is boot compatible in both protocol
+         * modes, so both Windows paths use the same report-ID-zero packet.
          */
         override fun onSetProtocol(device: BluetoothDevice, protocol: Byte) {
             val currentHost = host
@@ -85,8 +108,9 @@ class HidDeviceManager(private val context: Context) {
          * connected, but Windows may not finish bringing up its HID input channel.
          */
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
+            Log.i(TAG, "HID GET_REPORT type=$type id=$id size=$bufferSize from ${device.address}")
             val report = when (id.toInt()) {
-                0 -> if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) HidReportEncoder.bootMouse(buttons, 0, 0) else HidReportEncoder.mouse(buttons, 0, 0)
+                0 -> HidReportEncoder.mouse(buttons, 0, 0)
                 else -> null
             }
             if (report == null) {
@@ -100,10 +124,25 @@ class HidDeviceManager(private val context: Context) {
                 Log.w(TAG, "Could not reply to HID GET_REPORT for ${device.address}")
             }
         }
+
+        override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) {
+            Log.i(TAG, "HID SET_REPORT type=$type id=$id size=${data.size} from ${device.address}")
+        }
+
+        override fun onVirtualCableUnplug(device: BluetoothDevice) {
+            Log.i(TAG, "HID virtual cable unplugged by ${device.address}")
+            if (host?.address == device.address) {
+                host = null
+                buttons = 0
+                clearQueuedMotion()
+                _state.value = ConnectionState.Ready
+            }
+        }
     }
 
     private val serviceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+            profileRequestGeneration++
             hid = proxy as BluetoothHidDevice
             register()
         }
@@ -121,11 +160,24 @@ class HidDeviceManager(private val context: Context) {
         if (!hasPermissions) { _state.value = ConnectionState.PermissionRequired; return }
         if (adapter == null || !adapter.isEnabled) { _state.value = ConnectionState.Error("Turn on Bluetooth to use DeskPilot"); return }
         if (hid != null) {
-            if (!registered) register() else if (host == null) reconnectLastHost()
+            if (!registered) register()
             return
         }
         _state.value = ConnectionState.Registering
-        adapter.getProfileProxy(context, serviceListener, BluetoothProfile.HID_DEVICE)
+        val generation = ++profileRequestGeneration
+        if (!adapter.getProfileProxy(context, serviceListener, BluetoothProfile.HID_DEVICE)) {
+            _state.value = ConnectionState.Unsupported
+            return
+        }
+        // Some Android vendors expose Bluetooth HID host support but not the HID
+        // device profile.  Do not leave those phones permanently on “Registering”.
+        reportHandler.postDelayed({
+            if (generation == profileRequestGeneration && hid == null) {
+                _state.value = ConnectionState.Error(
+                    "This phone does not provide Android Bluetooth HID device mode."
+                )
+            }
+        }, PROFILE_CONNECTION_TIMEOUT_MS)
     }
 
     @SuppressLint("MissingPermission")
@@ -138,30 +190,52 @@ class HidDeviceManager(private val context: Context) {
     }
 
     fun move(dx: Int, dy: Int) = mouse(dx, dy)
-    fun scroll(vertical: Int, horizontal: Int) = mouse(0, 0, vertical, horizontal)
+    /**
+     * Scrolling is deliberately disabled while DeskPilot establishes a reliable
+     * boot-mouse connection.  A wheel axis changes the descriptor and caused the
+     * Windows HID driver to fail on the affected laptop.
+     */
+    fun scroll(vertical: Int, horizontal: Int) {
+        if (vertical != 0 || horizontal != 0) Log.d(TAG, "Scroll ignored in boot-mouse baseline")
+    }
     fun setButton(button: Int, down: Boolean) {
         buttons = if (down) buttons or button else buttons and button.inv()
-        mouse(0, 0)
+        mouse(0, 0, immediate = true)
     }
     fun click(button: Int) { setButton(button, true); setButton(button, false) }
     fun releaseAll() {
         buttons = 0
-        mouse(0, 0)
+        mouse(0, 0, immediate = true)
     }
     fun key(modifiers: Int, vararg keys: Int) {
         Log.i(TAG, "Keyboard shortcut ignored in mouse compatibility mode")
     }
-    private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0) {
-        val currentHost = host ?: return
-        if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
-            sendInputReport(currentHost, BOOT_REPORT_ID, HidReportEncoder.bootMouse(buttons, dx, dy))
-        } else {
-            sendInputReport(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy, wheel))
+    private fun mouse(dx: Int, dy: Int, immediate: Boolean = false) {
+        if (host == null) return
+        queuedDx += dx
+        queuedDy += dy
+        if (immediate) {
+            flushMotion()
+            return
         }
+        if (flushScheduled) return
+        val delay = (MIN_REPORT_INTERVAL_MS - (SystemClock.uptimeMillis() - lastReportAtMs)).coerceAtLeast(0)
+        flushScheduled = true
+        reportHandler.postDelayed({ flushMotion() }, delay)
+    }
+
+    private fun flushMotion() {
+        flushScheduled = false
+        val currentHost = host ?: run { clearQueuedMotion(); return }
+        val dx = takeAxis { queuedDx }.also { queuedDx -= it }
+        val dy = takeAxis { queuedDy }.also { queuedDy -= it }
+        sendNow(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy))
+        lastReportAtMs = SystemClock.uptimeMillis()
+        if (queuedDx != 0 || queuedDy != 0) mouse(0, 0)
     }
 
     /** Makes a stale virtual-cable connection visible instead of silently dropping input. */
-    private fun sendInputReport(device: BluetoothDevice, reportId: Int, data: ByteArray) {
+    private fun sendNow(device: BluetoothDevice, reportId: Int, data: ByteArray) {
         if (hid?.sendReport(device, reportId, data) == true) return
         Log.w(TAG, "HID input report was rejected for ${device.address}")
         _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
@@ -175,6 +249,11 @@ class HidDeviceManager(private val context: Context) {
         if (!registered || service == null) {
             _state.value = ConnectionState.Error("Enable DeskPilot Bluetooth before connecting")
             return false
+        }
+        if (service.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED) {
+            host = device
+            _state.value = ConnectionState.Connected(device.name ?: device.address)
+            return true
         }
         rememberHost(device)
         _state.value = ConnectionState.Connecting(device.name ?: device.address)
@@ -193,25 +272,16 @@ class HidDeviceManager(private val context: Context) {
             return false
         }
         _state.value = ConnectionState.Connecting(device.name ?: device.address)
-        // Disconnecting an existing virtual cable causes the callback to return to
-        // Ready, where reconnectLastHost() starts a clean connection. Starting a
-        // second connection before the disconnect callback races Windows' HID stack.
-        val accepted = if (host?.address == device.address) service.disconnect(device) else service.connect(device)
+        // Do not begin the new virtual cable until Android confirms the old one is
+        // closed. Starting both at once races Windows' HID stack.
+        val accepted = if (host?.address == device.address) {
+            reconnectAfterClose = device
+            service.disconnect(device)
+        } else service.connect(device)
         if (!accepted) {
             _state.value = ConnectionState.Error("Could not restart the HID connection. Turn Bluetooth off and on once on Windows, then tap Reconnect.")
         }
         return accepted
-    }
-
-    /** Reconnects only to the computer the user previously selected—never an arbitrary paired device. */
-    @SuppressLint("MissingPermission")
-    private fun reconnectLastHost() {
-        if (!registered || host != null) return
-        val rememberedHost = lastRememberedHost() ?: return
-        _state.value = ConnectionState.Connecting(rememberedHost.name ?: rememberedHost.address)
-        if (hid?.connect(rememberedHost) != true) {
-            _state.value = ConnectionState.Ready
-        }
     }
 
     @SuppressLint("MissingPermission")
@@ -226,6 +296,7 @@ class HidDeviceManager(private val context: Context) {
     }
     @SuppressLint("MissingPermission")
     fun stop() {
+        clearQueuedMotion()
         releaseAll()
         hid?.unregisterApp()
         hid?.let { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, it) }
@@ -236,5 +307,15 @@ class HidDeviceManager(private val context: Context) {
         const val LAST_HOST_ADDRESS = "last_host_address"
         const val TAG = "DeskPilotHid"
         const val BOOT_REPORT_ID = 0
+        const val MIN_REPORT_INTERVAL_MS = 8L
+        const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
+    }
+
+    private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
+    private fun clearQueuedMotion() {
+        reportHandler.removeCallbacksAndMessages(null)
+        flushScheduled = false
+        queuedDx = 0
+        queuedDy = 0
     }
 }
