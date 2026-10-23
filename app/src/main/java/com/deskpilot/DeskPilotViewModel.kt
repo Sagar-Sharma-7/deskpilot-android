@@ -39,6 +39,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     }
     fun rememberedDevices() = hid.rememberedDevices()
     fun connect(device: android.bluetooth.BluetoothDevice) = hid.connect(device)
+    fun reconnect() = hid.reconnect()
     fun setVolumeShortcuts(enabled: Boolean) = viewModelScope.launch { repository.setVolumeEnabled(enabled) }
     fun setVolumeAction(up: Boolean, action: DeskAction) = viewModelScope.launch { repository.setVolumeAction(up, action) }
     fun setPointerSpeed(speed: Float) = viewModelScope.launch { repository.setPointerSpeed(speed) }

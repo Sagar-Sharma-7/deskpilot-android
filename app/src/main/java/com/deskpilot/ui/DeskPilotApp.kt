@@ -145,6 +145,12 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(20.dp)); Button(onClick = request, enabled = !bluetoothReady) {
             Text(if (bluetoothReady) "DeskPilot Bluetooth is ready" else "Enable DeskPilot Bluetooth")
         }
+        if (state is ConnectionState.Connected || state is ConnectionState.Error) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = model::reconnect, enabled = bluetoothReady || state is ConnectionState.Error) {
+                Text("Reconnect mouse input")
+            }
+        }
         Spacer(Modifier.height(8.dp)); OutlinedButton(onClick = makeDiscoverable, enabled = bluetoothReady) { Text("Make phone discoverable for 5 minutes") }
         Spacer(Modifier.height(16.dp)); OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) { Text("Open Bluetooth settings") }
         Spacer(Modifier.height(24.dp)); Text("First-time pairing", fontWeight = FontWeight.SemiBold)
