@@ -21,11 +21,7 @@ class InputEnginesTest {
         assertEquals(0 to 1, engine.scroll(0f, 2f, natural = true))
     }
     @Test fun `mouse reports clamp HID relative ranges`() {
-        assertArrayEquals(byteArrayOf(1, 127, -127, 0, 0), HidReportEncoder.mouse(1, 500, -900))
-    }
-    @Test fun `keyboard release report clears every modifier and key`() {
-        assertArrayEquals(ByteArray(8), HidReportEncoder.keyboard(0))
-        assertEquals(1, HidReportEncoder.keyboard(1, 0x06)[0].toInt())
+        assertArrayEquals(byteArrayOf(1, 127, -127, 0), HidReportEncoder.mouse(1, 500, -900))
     }
     @Test fun `double tap emits exactly two physical clicks`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)

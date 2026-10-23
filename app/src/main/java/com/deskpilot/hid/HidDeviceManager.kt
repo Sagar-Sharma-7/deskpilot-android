@@ -86,9 +86,7 @@ class HidDeviceManager(private val context: Context) {
          */
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
             val report = when (id.toInt()) {
-                HidReportEncoder.MOUSE_REPORT_ID -> HidReportEncoder.mouse(buttons, 0, 0)
-                HidReportEncoder.KEYBOARD_REPORT_ID -> HidReportEncoder.keyboard(0)
-                0 -> if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) HidReportEncoder.bootMouse(buttons, 0, 0) else null
+                0 -> if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) HidReportEncoder.bootMouse(buttons, 0, 0) else HidReportEncoder.mouse(buttons, 0, 0)
                 else -> null
             }
             if (report == null) {
@@ -133,7 +131,7 @@ class HidDeviceManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun register() {
         val ok = hid?.registerApp(
-            BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_COMBO, HidDescriptor.bytes),
+            BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_MOUSE, HidDescriptor.bytes),
             null, null, executor, callback
         ) == true
         if (!ok) _state.value = ConnectionState.Error("Could not register the Bluetooth HID device")
@@ -149,24 +147,18 @@ class HidDeviceManager(private val context: Context) {
     fun releaseAll() {
         buttons = 0
         mouse(0, 0)
-        key(0)
     }
     fun key(modifiers: Int, vararg keys: Int) {
-        val currentHost = host ?: return
-        sendKeyboardReport(currentHost, HidReportEncoder.keyboard(modifiers, *keys))
-        sendKeyboardReport(currentHost, HidReportEncoder.keyboard(0))
+        Log.i(TAG, "Keyboard shortcut ignored in mouse compatibility mode")
     }
     private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0) {
         val currentHost = host ?: return
         if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
             sendInputReport(currentHost, BOOT_REPORT_ID, HidReportEncoder.bootMouse(buttons, dx, dy))
         } else {
-            sendInputReport(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy, wheel, pan))
+            sendInputReport(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy, wheel))
         }
     }
-
-    private fun sendKeyboardReport(device: BluetoothDevice, data: ByteArray) =
-        sendInputReport(device, if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) BOOT_REPORT_ID else HidReportEncoder.KEYBOARD_REPORT_ID, data)
 
     /** Makes a stale virtual-cable connection visible instead of silently dropping input. */
     private fun sendInputReport(device: BluetoothDevice, reportId: Int, data: ByteArray) {
