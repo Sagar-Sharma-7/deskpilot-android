@@ -30,7 +30,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     private val actions = ActionRegistry(hid, ::togglePrecision, ::toggleDragLock)
     val gestures = GestureEngine(this)
 
-    init { viewModelScope.launch { settings.collect { s -> pointer.updateTuning(PointerTuning(s.pointerSpeed, s.acceleration, s.accelerationStrength, s.precisionMultiplier)); scroll.updateSpeed(s.scrollSpeed, s.advancedLaptopGestures) } } }
+    init { viewModelScope.launch { settings.collect { s -> pointer.updateTuning(PointerTuning(s.pointerSpeed, s.acceleration, s.accelerationStrength, s.precisionMultiplier)); scroll.updateSpeed(s.scrollSpeed) } } }
     fun startBluetooth(allowed: Boolean) {
         if (allowed) HidForegroundService.start(getApplication())
         hid.start(allowed)
@@ -89,7 +89,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
             _hapticEvents.tryEmit(HapticCue.SCROLL)
         }
     }
-    override fun finishMotion() { pinchAccumulator = 0f; hid.endZoomGesture(); hid.discardPendingMotion() }
+    override fun finishMotion() { pinchAccumulator = 0f; hid.discardPendingMotion() }
     override fun mouseDown() { hid.setButton(HidReportEncoder.LEFT, true); haptic(HapticCue.DRAG_START) }
     override fun mouseUp() = hid.setButton(HidReportEncoder.LEFT, false)
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) {
@@ -103,16 +103,13 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     }
     override fun pinch(scaleDelta: Float) {
         if (!settings.value.advancedLaptopGestures || !settings.value.pinchToZoom) return
-        // The advanced HID wheel has 16 fine units per ordinary wheel notch.
-        // Ctrl + that wheel is interpreted by canvases and browsers as a
-        // continuous zoom gesture instead of a Ctrl+Plus percentage jump.
-        pinchAccumulator += scaleDelta * PINCH_WHEEL_UNITS_PER_SCALE
+        pinchAccumulator += scaleDelta
         while (pinchAccumulator >= PINCH_STEP) {
-            hid.zoomScroll(1)
+            hid.key(HID_LEFT_CONTROL, HID_EQUAL)
             pinchAccumulator -= PINCH_STEP
         }
         while (pinchAccumulator <= -PINCH_STEP) {
-            hid.zoomScroll(-1)
+            hid.key(HID_LEFT_CONTROL, HID_MINUS)
             pinchAccumulator += PINCH_STEP
         }
     }
@@ -121,7 +118,9 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
 
     private companion object {
         const val SCROLL_HAPTIC_INTERVAL_MS = 45L
-        const val PINCH_STEP = 1f
-        const val PINCH_WHEEL_UNITS_PER_SCALE = 20f
+        const val PINCH_STEP = .10f
+        const val HID_LEFT_CONTROL = 0x01
+        const val HID_MINUS = 0x2D
+        const val HID_EQUAL = 0x2E
     }
 }

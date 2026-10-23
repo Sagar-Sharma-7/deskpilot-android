@@ -38,11 +38,7 @@ class PointerEngine(private var tuning: PointerTuning = PointerTuning()) {
 class ScrollEngine(private var speed: Float = .12f) {
     private var verticalRemainder = 0f
     private var horizontalRemainder = 0f
-    fun updateSpeed(value: Float, highResolution: Boolean = false) {
-        // A standard mouse wheel unit is a full Windows detent. The advanced
-        // descriptor advertises 16 high-resolution units per detent instead.
-        speed = value * if (highResolution) HIGH_RESOLUTION_MULTIPLIER else 1f
-    }
+    fun updateSpeed(value: Float) { speed = value }
     fun reset() { verticalRemainder = 0f; horizontalRemainder = 0f }
     fun scroll(dx: Float, dy: Float, natural: Boolean): Pair<Int, Int> {
         val direction = if (natural) 1 else -1
@@ -53,9 +49,5 @@ class ScrollEngine(private var speed: Float = .12f) {
         verticalRemainder -= vertical
         horizontalRemainder -= horizontal
         return vertical to horizontal
-    }
-
-    private companion object {
-        const val HIGH_RESOLUTION_MULTIPLIER = 16f
     }
 }

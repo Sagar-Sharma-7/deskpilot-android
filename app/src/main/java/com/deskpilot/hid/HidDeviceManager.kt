@@ -47,8 +47,6 @@ class HidDeviceManager(private val context: Context) {
     private var advancedProfile = false
     private var profileRefreshPending = false
     private var profileRefreshScheduled = false
-    private var resolutionMultiplierReport = DEFAULT_RESOLUTION_MULTIPLIER_REPORT
-    private var zoomModifierHeld = false
     private val reportHandler = Handler(Looper.getMainLooper())
     private val pendingClickReleases = mutableMapOf<Int, Runnable>()
     private val pendingKeyStrokes = ArrayDeque<ByteArray>()
@@ -63,7 +61,6 @@ class HidDeviceManager(private val context: Context) {
         keyStrokeInFlight = false
         sendNextKeyStroke()
     }
-    private val zoomModifierReleaseRunnable = Runnable { endZoomGesture() }
 
     init {
         advancedProfile = connectionPrefs.getBoolean(ADVANCED_PROFILE, false)
@@ -75,7 +72,6 @@ class HidDeviceManager(private val context: Context) {
             if (!registered) {
                 channelOpen = false
                 host = null
-                discardZoomModifier()
                 if (profileRefreshPending) {
                     scheduleProfileRegistration()
                     return
@@ -132,7 +128,6 @@ class HidDeviceManager(private val context: Context) {
                     host = null
                     cancelAllClickReleases()
                     clearPendingKeyStrokes()
-                    discardZoomModifier()
                     buttons = 0
                     val next = reconnectAfterClose
                     reconnectAfterClose = null
@@ -161,8 +156,6 @@ class HidDeviceManager(private val context: Context) {
 
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
             val report = when {
-                advancedProfile && type.toInt() == BluetoothHidDevice.REPORT_TYPE_FEATURE.toInt() &&
-                    id.toInt() == HidReportEncoder.ADVANCED_MOUSE_REPORT_ID -> byteArrayOf(resolutionMultiplierReport)
                 protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE && id.toInt() == HidReportEncoder.BASIC_MOUSE_REPORT_ID ->
                     HidReportEncoder.bootMouse(buttons, 0, 0)
                 id.toInt() == mouseReportId() -> currentReport(0, 0, 0, 0)
@@ -175,13 +168,6 @@ class HidDeviceManager(private val context: Context) {
             }
         }
 
-        override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) {
-            if (advancedProfile && type.toInt() == BluetoothHidDevice.REPORT_TYPE_FEATURE.toInt() &&
-                id.toInt() == HidReportEncoder.ADVANCED_MOUSE_REPORT_ID && data.isNotEmpty()) {
-                resolutionMultiplierReport = data[0]
-            }
-        }
-
         override fun onVirtualCableUnplug(device: BluetoothDevice) {
             if (host?.address == device.address) {
                 channelOpen = false
@@ -189,7 +175,6 @@ class HidDeviceManager(private val context: Context) {
                 buttons = 0
                 cancelAllClickReleases()
                 clearPendingKeyStrokes()
-                discardZoomModifier()
                 _state.value = ConnectionState.Ready
             }
         }
@@ -213,7 +198,6 @@ class HidDeviceManager(private val context: Context) {
             buttons = 0
             cancelAllClickReleases()
             clearPendingKeyStrokes()
-            discardZoomModifier()
             _state.value = ConnectionState.Error("Bluetooth HID service stopped")
         }
     }
@@ -289,33 +273,6 @@ class HidDeviceManager(private val context: Context) {
         if (vertical != 0 || horizontal != 0) sendMouse(0, 0, vertical, if (advancedProfile) horizontal else 0)
     }
 
-    /** Sends a short Ctrl+high-resolution-wheel gesture for continuous pinch zoom. */
-    fun zoomScroll(vertical: Int) {
-        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE || vertical == 0) return
-        reportHandler.removeCallbacks(zoomModifierReleaseRunnable)
-        if (!zoomModifierHeld) {
-            zoomModifierHeld = true
-            host?.let { sendNow(it, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(HID_LEFT_CONTROL)) }
-        }
-        scroll(vertical, 0)
-        reportHandler.postDelayed(zoomModifierReleaseRunnable, ZOOM_MODIFIER_IDLE_MS)
-    }
-
-    fun endZoomGesture() {
-        reportHandler.removeCallbacks(zoomModifierReleaseRunnable)
-        if (!zoomModifierHeld) return
-        zoomModifierHeld = false
-        val device = host ?: return
-        if (advancedProfile && channelOpen && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
-            sendNow(device, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(0))
-        }
-    }
-
-    private fun discardZoomModifier() {
-        reportHandler.removeCallbacks(zoomModifierReleaseRunnable)
-        zoomModifierHeld = false
-    }
-
     fun setButton(button: Int, down: Boolean) {
         cancelPendingClickRelease(button)
         buttons = if (down) buttons or button else buttons and button.inv()
@@ -338,7 +295,6 @@ class HidDeviceManager(private val context: Context) {
     fun releaseAll() {
         cancelAllClickReleases()
         clearPendingKeyStrokes(releaseActiveKey = true)
-        endZoomGesture()
         buttons = 0
         sendMouse(0, 0, 0, 0)
     }
@@ -595,9 +551,6 @@ class HidDeviceManager(private val context: Context) {
         const val CLICK_HOLD_MS = 28L
         const val KEY_HOLD_MS = 12L
         const val KEY_GAP_MS = 8L
-        const val HID_LEFT_CONTROL = 0x01
-        const val ZOOM_MODIFIER_IDLE_MS = 65L
-        const val DEFAULT_RESOLUTION_MULTIPLIER_REPORT: Byte = 0xFF.toByte()
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
         const val PROFILE_REFRESH_DELAY_MS = 350L
     }
