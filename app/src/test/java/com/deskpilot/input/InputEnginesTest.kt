@@ -6,8 +6,8 @@ import org.junit.Test
 
 class InputEnginesTest {
 
-    @Test fun `boot mouse report is a three byte no-report-id packet`() {
-        assertArrayEquals(byteArrayOf(0x07, 12, (-9).toByte()), HidReportEncoder.bootMouse(0x1f, 12, -9))
+    @Test fun `mouse report is a three byte boot-compatible packet`() {
+        assertArrayEquals(byteArrayOf(0x07, 12, (-9).toByte()), HidReportEncoder.mouse(0x1f, 12, -9))
     }
     @Test fun `pointer retains subpixel movement until a HID integer exists`() {
         val engine = PointerEngine(PointerTuning(sensitivity = 1f, acceleration = false))
@@ -21,7 +21,7 @@ class InputEnginesTest {
         assertEquals(0 to 1, engine.scroll(0f, 2f, natural = true))
     }
     @Test fun `mouse reports clamp HID relative ranges`() {
-        assertArrayEquals(byteArrayOf(1, 127, -127, 0, 0), HidReportEncoder.mouse(1, 500, -900))
+        assertArrayEquals(byteArrayOf(1, 127, -127), HidReportEncoder.mouse(1, 500, -900))
     }
     @Test fun `double tap emits exactly two physical clicks`() {
         val sink = RecordingSink(); val engine = GestureEngine(sink)

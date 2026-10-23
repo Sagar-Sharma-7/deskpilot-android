@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +34,10 @@ class HidDeviceManager(private val context: Context) {
     private var profileRequestGeneration = 0
     private var protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
     private var reconnectAfterClose: BluetoothDevice? = null
+    private var queuedDx = 0
+    private var queuedDy = 0
+    private var flushScheduled = false
+    private var lastReportAtMs = 0L
     private val reportHandler = Handler(Looper.getMainLooper())
     private val connectionPrefs: SharedPreferences = context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
@@ -108,8 +113,6 @@ class HidDeviceManager(private val context: Context) {
             Log.i(TAG, "HID GET_REPORT type=$type id=$id size=$bufferSize from ${device.address}")
             val report = when (id.toInt()) {
                 HidReportEncoder.MOUSE_REPORT_ID -> HidReportEncoder.mouse(buttons, 0, 0)
-                HidReportEncoder.KEYBOARD_REPORT_ID -> HidReportEncoder.keyboard(0)
-                0 -> if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) HidReportEncoder.bootMouse(buttons, 0, 0) else null
                 else -> null
             }
             if (report == null) {
@@ -196,7 +199,7 @@ class HidDeviceManager(private val context: Context) {
     private fun register() {
         val ok = try {
             hid?.registerApp(
-                BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_COMBO, HidDescriptor.bytes),
+                BluetoothHidDeviceAppSdpSettings("DeskPilot", "Wireless trackpad and mouse", "DeskPilot", BluetoothHidDevice.SUBCLASS1_MOUSE, HidDescriptor.bytes),
                 null, null, executor, callback
             ) == true
         } catch (error: SecurityException) {
@@ -210,41 +213,43 @@ class HidDeviceManager(private val context: Context) {
     }
 
     fun move(dx: Int, dy: Int) = mouse(dx, dy)
-    fun scroll(vertical: Int, horizontal: Int) = mouse(0, 0, vertical, horizontal)
+    fun scroll(vertical: Int, horizontal: Int) {
+        if (vertical != 0 || horizontal != 0) Log.d(TAG, "Scroll disabled in boot-mouse stability mode")
+    }
     fun setButton(button: Int, down: Boolean) {
         buttons = if (down) buttons or button else buttons and button.inv()
-        mouse(0, 0)
+        mouse(0, 0, immediate = true)
     }
     fun click(button: Int) { setButton(button, true); setButton(button, false) }
     fun releaseAll() {
         buttons = 0
-        mouse(0, 0)
-        key(0)
+        mouse(0, 0, immediate = true)
     }
     fun key(modifiers: Int, vararg keys: Int) {
-        val currentHost = host ?: return
-        // Boot protocol has an untagged mouse packet. It cannot safely carry a
-        // second, untagged keyboard packet from this combined device, so retain
-        // the known-good pointer path until the host switches back to report mode.
-        if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
-            Log.i(TAG, "Keyboard shortcut skipped while host is in boot protocol")
+        Log.d(TAG, "Keyboard shortcut disabled in boot-mouse stability mode")
+    }
+    private fun mouse(dx: Int, dy: Int, immediate: Boolean = false) {
+        if (host == null) return
+        queuedDx += dx
+        queuedDy += dy
+        if (immediate) {
+            flushMotion()
             return
         }
-        sendNow(currentHost, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(modifiers, *keys))
-        sendNow(currentHost, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(0))
+        if (flushScheduled) return
+        val delay = (MIN_REPORT_INTERVAL_MS - (SystemClock.uptimeMillis() - lastReportAtMs)).coerceAtLeast(0)
+        flushScheduled = true
+        reportHandler.postDelayed({ flushMotion() }, delay)
     }
-    /**
-     * Send each current touch delta immediately. Android's HID transport already
-     * performs its own flow control; an app-side timer produced visible queues
-     * on both tested phones and replayed old motion after a finger stopped.
-     */
-    private fun mouse(dx: Int, dy: Int, wheel: Int = 0, pan: Int = 0) {
-        val currentHost = host ?: return
-        if (protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
-            sendNow(currentHost, BOOT_REPORT_ID, HidReportEncoder.bootMouse(buttons, dx, dy))
-        } else {
-            sendNow(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy, wheel, pan))
-        }
+
+    private fun flushMotion() {
+        flushScheduled = false
+        val currentHost = host ?: run { clearQueuedMotion(); return }
+        val dx = takeAxis { queuedDx }.also { queuedDx -= it }
+        val dy = takeAxis { queuedDy }.also { queuedDy -= it }
+        sendNow(currentHost, HidReportEncoder.MOUSE_REPORT_ID, HidReportEncoder.mouse(buttons, dx, dy))
+        lastReportAtMs = SystemClock.uptimeMillis()
+        if (queuedDx != 0 || queuedDy != 0) mouse(0, 0)
     }
 
     /** Makes a stale virtual-cable connection visible instead of silently dropping input. */
@@ -260,7 +265,7 @@ class HidDeviceManager(private val context: Context) {
         _state.value = ConnectionState.Error("Windows is not accepting mouse input. Open Connect and tap Reconnect.")
     }
 
-    /** Direct report delivery means there is no app-side motion backlog to clear. */
+    /** A final lift is allowed to flush the small baseline queue normally. */
     fun discardPendingMotion() = Unit
     @SuppressLint("MissingPermission")
     fun rememberedDevices(): List<BluetoothDevice> = try {
@@ -363,14 +368,21 @@ class HidDeviceManager(private val context: Context) {
     private companion object {
         const val LAST_HOST_ADDRESS = "last_host_address"
         const val TAG = "DeskPilotHid"
-        const val BOOT_REPORT_ID = 0
+        const val MIN_REPORT_INTERVAL_MS = 8L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
     }
+
+    private fun takeAxis(value: () -> Int): Int = value().coerceIn(-127, 127)
 
     private fun reportBluetoothFailure(message: String, error: Exception) {
         Log.e(TAG, message, error)
         _state.value = ConnectionState.Error("$message. Check Bluetooth permissions and try again.")
     }
 
-    private fun clearQueuedMotion() = Unit
+    private fun clearQueuedMotion() {
+        reportHandler.removeCallbacksAndMessages(null)
+        flushScheduled = false
+        queuedDx = 0
+        queuedDy = 0
+    }
 }

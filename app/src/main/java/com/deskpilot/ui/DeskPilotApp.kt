@@ -96,8 +96,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         }
         Spacer(Modifier.height(12.dp))
         Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
-        Spacer(Modifier.height(10.dp))
-        QuickActions(model)
         Spacer(Modifier.height(8.dp))
         MouseButtons(model, settings.leftHanded)
     }
@@ -181,7 +179,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(16.dp)); OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) { Text("Open Bluetooth settings") }
         Spacer(Modifier.height(24.dp)); Text("First-time pairing", fontWeight = FontWeight.SemiBold)
         Text("1. For the first pairing only: tap Make phone discoverable and approve Android's prompt.\n2. On Windows 11: Settings → Bluetooth & devices → Add device → Bluetooth. Select this phone by its normal Bluetooth name and approve the code on both devices.\n3. Return here and tap Connect beside the Galaxy Book. Do not use Windows' generic Connect button as the mouse connection; wait for this screen to say HID mouse connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp)); Text("Full gesture test mode is enabled: scrolling, pinch shortcuts, and three/four-finger desktop gestures are available. Pair this version as a new Bluetooth device once so Windows reads its expanded HID profile.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp)); Text("Stability mouse mode is active: pointer, click, and drag are enabled. Scrolling and keyboard gestures are paused until mouse input is proven reliable. Remove the old Windows pairing and pair once so Windows reads this simpler HID profile.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         val devices = model.rememberedDevices()
         if (devices.isNotEmpty()) {
             Spacer(Modifier.height(20.dp)); Text("Remembered devices", fontWeight = FontWeight.SemiBold)
@@ -196,7 +194,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 }
 
 @Composable private fun SettingsScreen(model: DeskPilotViewModel, settings: DeskSettings, back: () -> Unit) {
-    var chooseFor by remember { mutableStateOf<Boolean?>(null) }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         TextButton(onClick = back) { Text("← Trackpad") }; Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
@@ -205,10 +202,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Slider(settings.pointerSpeed, { model.setPointerSpeed(it) }, valueRange = .35f..2.4f)
         SettingsHeader("Scrolling")
         SettingToggle("Natural scrolling", "Move content with your fingers", settings.naturalScroll, model::setNaturalScroll)
-        SettingsHeader("Physical buttons")
-        SettingToggle("Use volume buttons as shortcuts", "Only while this foreground screen is connected", settings.useVolumeShortcuts, model::setVolumeShortcuts)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Volume up"); TextButton({ chooseFor = true }) { Text(settings.volumeUp.label) } }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Volume down"); TextButton({ chooseFor = false }) { Text(settings.volumeDown.label) } }
         SettingsHeader("Appearance")
         SettingToggle("Dark theme", "", settings.darkTheme, model::setDark)
         SettingToggle("Extreme dark mode", "Pure-black low-brightness trackpad; Settings stay readable", settings.extremeDark, model::setExtremeDark)
@@ -216,7 +209,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         SettingToggle("Haptics", "Clicks and shortcuts only", settings.haptics, model::setHaptics)
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
-    chooseFor?.let { up -> ActionChooser(if (up) "Volume up" else "Volume down", { chooseFor = null }) { model.setVolumeAction(up, it); chooseFor = null } }
 }
 
 @Composable private fun SettingsHeader(text: String) { Spacer(Modifier.height(20.dp)); Text(text, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
