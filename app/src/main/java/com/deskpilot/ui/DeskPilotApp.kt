@@ -120,7 +120,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             Button(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause") }
             TextButton(onClick = { model.media(ConsumerControl.NEXT) }) { Text("›") }
         }
-        Text("Fine volume adjustment · 50 detents", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Fine volume adjustment · 50 detents · endpoints set min/max", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_DOWN) }) { Text("−") }
             Slider(
@@ -132,7 +132,13 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                     val stepChange = newStep - oldStep
                     if (stepChange != 0) {
                         val control = if (stepChange > 0) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN
-                        repeat(kotlin.math.abs(stepChange)) { model.adjustVolume(control) }
+                        val endpointClamp = if (newStep == 0 || newStep == VOLUME_SLIDER_INTERVALS) {
+                            VOLUME_ENDPOINT_CLAMP_STEPS
+                        } else 0
+                        // A Consumer Control report has no absolute-volume value.
+                        // At either endpoint, extra reports make Windows clamp at
+                        // its actual minimum or maximum instead of stopping short.
+                        repeat(kotlin.math.abs(stepChange) + endpointClamp) { model.adjustVolume(control) }
                     }
                     // This reports 50 fine adjustment detents, not the laptop's
                     // unknown current volume. Standard HID does not provide that.
@@ -147,6 +153,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 }
 
 private const val VOLUME_SLIDER_INTERVALS = 50
+private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
 
 @Composable private fun StatusDot(state: ConnectionState, modifier: Modifier = Modifier) {
     val color = when (state) { is ConnectionState.Connected -> Color(0xFF22A06B); is ConnectionState.Error, ConnectionState.PermissionRequired, ConnectionState.Unsupported -> MaterialTheme.colorScheme.error; else -> Color(0xFFE2A817) }
