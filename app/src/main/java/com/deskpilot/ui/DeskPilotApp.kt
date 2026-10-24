@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import com.deskpilot.DeskPilotViewModel
 import com.deskpilot.actions.DeskAction
 import com.deskpilot.data.DeskSettings
+import com.deskpilot.data.MultiFingerPreset
+import com.deskpilot.hid.ConsumerControl
 import com.deskpilot.hid.ConnectionState
 import com.deskpilot.hid.HidReportEncoder
 import com.deskpilot.input.TouchPoint
@@ -96,9 +98,38 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             TextButton(onClick = openSettings) { Text("Settings") }
         }
         Spacer(Modifier.height(12.dp))
+        if (settings.advancedLaptopGestures) {
+            MediaControls(model)
+            Spacer(Modifier.height(10.dp))
+        }
         Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
         Spacer(Modifier.height(8.dp))
         MouseButtons(model, settings.leftHanded)
+    }
+}
+
+@Composable private fun MediaControls(model: DeskPilotViewModel) {
+    var volumePosition by remember { mutableFloatStateOf(.5f) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = { model.media(ConsumerControl.MUTE) }) { Text("Mute") }
+            TextButton(onClick = { model.media(ConsumerControl.PREVIOUS) }) { Text("‹") }
+            Button(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause") }
+            TextButton(onClick = { model.media(ConsumerControl.NEXT) }) { Text("›") }
+        }
+        Text("Relative volume", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Slider(
+            value = volumePosition,
+            onValueChange = { value ->
+                val change = value - volumePosition
+                if (kotlin.math.abs(change) >= .08f) {
+                    val control = if (change > 0f) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN
+                    repeat((kotlin.math.abs(change) / .08f).toInt().coerceIn(1, 3)) { model.media(control) }
+                    volumePosition = value
+                }
+            },
+            valueRange = 0f..1f
+        )
     }
 }
 
@@ -196,7 +227,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(16.dp)); OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) { Text("Open Bluetooth settings") }
         Spacer(Modifier.height(24.dp)); Text("First-time pairing", fontWeight = FontWeight.SemiBold)
         Text("1. For the first pairing only: tap Make phone discoverable and approve Android's prompt.\n2. On Windows 11: Settings → Bluetooth & devices → Add device → Bluetooth. Select this phone by its normal Bluetooth name and approve the code on both devices.\n3. Return here and tap Connect beside the Galaxy Book. Do not use Windows' generic Connect button as the mouse connection; wait for this screen to say HID mouse connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp)); Text("Simple trackpad mode: one finger moves/taps, two fingers scroll, and a two-finger tap right-clicks. DeskPilot now uses one fixed mouse profile. Because this update changes that profile, remove the old Windows pairing and pair once after installing this version.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.height(12.dp)); Text("This version adds media controls to the advanced Bluetooth profile. Remove the old Windows pairing and pair once after installing it. Your other mice and their Windows settings are not changed.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         val devices = model.rememberedDevices()
         if (devices.isNotEmpty()) {
             Spacer(Modifier.height(20.dp)); Text("Remembered devices", fontWeight = FontWeight.SemiBold)
@@ -212,6 +243,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 @Composable private fun SettingsScreen(model: DeskPilotViewModel, settings: DeskSettings, back: () -> Unit) {
     var showAdvancedProfileWarning by rememberSaveable { mutableStateOf(false) }
+    var multiFingerMenuOpen by rememberSaveable { mutableStateOf(false) }
     val gestureDiagnostics by model.gestureDiagnostics.collectAsState()
     val hidDiagnostics by model.hidDiagnostics.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
@@ -233,11 +265,28 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         SettingsHeader("Advanced laptop gestures")
         SettingToggle(
             "Advanced laptop gestures",
-            "Enables horizontal scrolling and pinch-to-zoom; changing it requires re-pairing Windows.",
+            "Enables horizontal scrolling, zoom, media controls, and multi-finger presets; changing it requires re-pairing Windows.",
             settings.advancedLaptopGestures
         ) { showAdvancedProfileWarning = true }
         if (settings.advancedLaptopGestures) {
             SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
+            Text("Multi-finger preset", fontWeight = FontWeight.Medium)
+            Box {
+                OutlinedButton(onClick = { multiFingerMenuOpen = true }) { Text(settings.multiFingerPreset.label) }
+                DropdownMenu(expanded = multiFingerMenuOpen, onDismissRequest = { multiFingerMenuOpen = false }) {
+                    MultiFingerPreset.entries.forEach { preset ->
+                        DropdownMenuItem(
+                            text = { Text(preset.label) },
+                            onClick = { model.setMultiFingerPreset(preset); multiFingerMenuOpen = false }
+                        )
+                    }
+                }
+            }
+            Text(
+                "Windows navigation: 3 fingers Task View/Desktop/apps; 4 fingers switch desktops. " +
+                    "Media controls: 3 fingers volume/tracks; 3-finger tap play/pause.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         SettingsHeader("Developer")
         SettingToggle("Input diagnostics", "Shows live gesture recognition and HID report information. Leave off for normal use.", settings.developerDiagnostics, model::setDeveloperDiagnostics)
@@ -251,7 +300,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             )
             Text(
                 "HID: ${hidDiagnostics.reportsPerSecond} reports/s · buttons ${hidDiagnostics.heldButtons}" +
-                    "\nqueued shortcuts ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
+                    "\nqueued HID actions ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

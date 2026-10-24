@@ -33,6 +33,7 @@ interface GestureSink {
     fun mouseUp()
     fun click(count: Int = 1, button: MouseButton = MouseButton.LEFT, isDoubleTap: Boolean = false)
     fun swipe(fingers: Int, dx: Float, dy: Float)
+    fun multiFingerTap(fingers: Int)
     fun pinch(scaleDelta: Float)
     fun cancel()
 }
@@ -40,7 +41,10 @@ interface GestureSink {
 enum class MouseButton { LEFT, RIGHT, MIDDLE }
 
 /** Exposed for the optional developer diagnostics. */
-enum class GestureState { IDLE, POINTER, TWO_FINGER_TAP_CANDIDATE, TWO_FINGER_PENDING, TWO_FINGER_SCROLL, TWO_FINGER_PINCH }
+enum class GestureState {
+    IDLE, POINTER, TWO_FINGER_TAP_CANDIDATE, TWO_FINGER_PENDING, TWO_FINGER_SCROLL, TWO_FINGER_PINCH,
+    MULTI_FINGER_PENDING, MULTI_FINGER_ACTIVE
+}
 
 /**
  * Predictable touchpad gestures with a small evidence window for two fingers.
@@ -54,12 +58,14 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         val tapSlopDp: Float = 6f,
         val scrollActivationDp: Float = 3.5f,
         val pinchActivationDp: Float = 5f,
+        val multiFingerSwipeDp: Float = 12f,
         val tapTimeoutMs: Long = 280,
         val doubleTapDragTimeoutMs: Long = 900
     ) {
         val tapSlop get() = tapSlopDp * density
         val scrollActivationSlop get() = scrollActivationDp * density
         val pinchActivationSlop get() = pinchActivationDp * density
+        val multiFingerSwipeSlop get() = multiFingerSwipeDp * density
     }
 
     var state: GestureState = GestureState.IDLE
@@ -93,6 +99,8 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     private var lastScrollDy = 0f
     private var lastPinchDelta = 0f
     private var cancellationCount = 0
+    private var multiFingerStartCenter = 0f to 0f
+    private var multiFingerDispatched = false
 
     fun setDiagnosticsEnabled(enabled: Boolean) {
         diagnosticsEnabled = enabled
@@ -119,7 +127,10 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
 
         start = points
         maxFingers = max(maxFingers, points.size)
-        if (points.size == 2) beginTwoFingerGesture()
+        when (points.size) {
+            2 -> beginTwoFingerGesture()
+            in 3..5 -> beginMultiFingerGesture()
+        }
         publishDiagnostics()
     }
 
@@ -133,7 +144,8 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
 
         when {
             next.size == 1 && previous.size == 1 -> movePointer(next, previous)
-            next.size == 2 && previous.size == 2 -> moveTwoFingers(next, previous, time)
+            next.size == 2 && previous.size == 2 && state != GestureState.MULTI_FINGER_PENDING && state != GestureState.MULTI_FINGER_ACTIVE -> moveTwoFingers(next, previous, time)
+            next.size in 3..5 && previous.size == next.size -> moveMultiFinger(next)
             next.size == 1 && previous.size == 2 -> {
                 // A pointer-count transition has no meaningful one-finger delta.
                 start = next
@@ -171,6 +183,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                     lastTap = released
                 }
                 2 -> sink.click(button = MouseButton.RIGHT)
+                3 -> sink.multiFingerTap(3)
             }
         }
         reset()
@@ -255,6 +268,19 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         }
     }
 
+    /** Multi-finger input is one deliberate directional action, never a continuous scroll. */
+    private fun moveMultiFinger(next: Map<Int, TouchPoint>) {
+        if (multiFingerDispatched) return
+        val centroid = centerOf(next.values)
+        val dx = centroid.first - multiFingerStartCenter.first
+        val dy = centroid.second - multiFingerStartCenter.second
+        if (max(abs(dx), abs(dy)) < config.multiFingerSwipeSlop) return
+        multiFingerDispatched = true
+        moved = true
+        state = GestureState.MULTI_FINGER_ACTIVE
+        sink.swipe(next.size.coerceAtMost(5), dx, dy)
+    }
+
     private fun classifyTwoFingerGesture(fingerVelocityAgreement: Float, distance: Float, time: Long): Boolean {
         val translationScore = translationEvidence / config.scrollActivationSlop
         val scaleScore = scaleEvidence / config.pinchActivationSlop
@@ -295,6 +321,12 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         state = GestureState.TWO_FINGER_TAP_CANDIDATE
     }
 
+    private fun beginMultiFingerGesture() {
+        multiFingerStartCenter = centerOf(points.values)
+        multiFingerDispatched = false
+        state = GestureState.MULTI_FINGER_PENDING
+    }
+
     private fun reset() {
         points = emptyMap()
         start = emptyMap()
@@ -306,6 +338,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         pendingDx = 0f
         pendingDy = 0f
         twoFingerMotionFinished = false
+        multiFingerDispatched = false
         recognitionLatencyMs = null
         state = GestureState.IDLE
     }
@@ -331,6 +364,12 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     }
 
     private fun center(): Pair<Float, Float> = points.values.take(2).let { center(it[0], it[1]) }
+    private fun centerOf(values: Collection<TouchPoint>): Pair<Float, Float> {
+        var x = 0f
+        var y = 0f
+        values.forEach { point -> x += point.x; y += point.y }
+        return x / values.size to y / values.size
+    }
     private fun center(first: TouchPoint, second: TouchPoint) = (first.x + second.x) / 2f to (first.y + second.y) / 2f
     private fun distance(first: TouchPoint, second: TouchPoint) = hypot((first.x - second.x).toDouble(), (first.y - second.y).toDouble()).toFloat()
 

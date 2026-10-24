@@ -35,6 +35,15 @@ data class HidDiagnostics(
     val failedReports: Int = 0
 )
 
+enum class ConsumerControl(val bit: Int) {
+    MUTE(HidReportEncoder.CONSUMER_MUTE),
+    VOLUME_UP(HidReportEncoder.CONSUMER_VOLUME_UP),
+    VOLUME_DOWN(HidReportEncoder.CONSUMER_VOLUME_DOWN),
+    NEXT(HidReportEncoder.CONSUMER_NEXT),
+    PREVIOUS(HidReportEncoder.CONSUMER_PREVIOUS),
+    PLAY_PAUSE(HidReportEncoder.CONSUMER_PLAY_PAUSE)
+}
+
 /**
  * The deliberately small Bluetooth HID transport used by DeskPilot.
  *
@@ -64,6 +73,8 @@ class HidDeviceManager(private val context: Context) {
     private val pendingKeyStrokes = ArrayDeque<KeyStroke>()
     private var keyStrokeInFlight = false
     private var activeKeySource: KeySource? = null
+    private val pendingConsumerControls = ArrayDeque<Int>()
+    private var consumerInFlight = false
     private val connectionPrefs: SharedPreferences =
         context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
@@ -82,6 +93,11 @@ class HidDeviceManager(private val context: Context) {
         activeKeySource = null
         sendNextKeyStroke()
     }
+    private val consumerReleaseRunnable = Runnable { releaseCurrentConsumerControl() }
+    private val consumerNextRunnable = Runnable {
+        consumerInFlight = false
+        sendNextConsumerControl()
+    }
     private val connectionTimeoutRunnable = Runnable { recoverStuckConnection() }
     private val reconnectFallbackRunnable = Runnable { retryConnectionAfterClose() }
 
@@ -93,6 +109,10 @@ class HidDeviceManager(private val context: Context) {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             this@HidDeviceManager.registered = registered
             if (!registered) {
+                cancelAllClickReleases()
+                clearPendingKeyStrokes()
+                clearPendingConsumerControls()
+                buttons = 0
                 channelOpen = false
                 host = null
                 clearConnectionAttempt()
@@ -162,6 +182,7 @@ class HidDeviceManager(private val context: Context) {
                     host = null
                     cancelAllClickReleases()
                     clearPendingKeyStrokes()
+                    clearPendingConsumerControls()
                     buttons = 0
                     val next = reconnectAfterClose
                     reconnectAfterClose = null
@@ -195,6 +216,7 @@ class HidDeviceManager(private val context: Context) {
                     HidReportEncoder.bootMouse(buttons, 0, 0)
                 id.toInt() == mouseReportId() -> currentReport(0, 0, 0, 0)
                 advancedProfile && id.toInt() == HidReportEncoder.KEYBOARD_REPORT_ID -> HidReportEncoder.keyboard(0)
+                advancedProfile && id.toInt() == HidReportEncoder.CONSUMER_REPORT_ID -> HidReportEncoder.consumer(0)
                 else -> return
             }
             val reply = report.copyOf(maxOf(report.size, bufferSize))
@@ -210,6 +232,7 @@ class HidDeviceManager(private val context: Context) {
                 buttons = 0
                 cancelAllClickReleases()
                 clearPendingKeyStrokes()
+                clearPendingConsumerControls()
                 clearConnectionAttempt()
                 _state.value = ConnectionState.Ready
             }
@@ -234,6 +257,7 @@ class HidDeviceManager(private val context: Context) {
             buttons = 0
             cancelAllClickReleases()
             clearPendingKeyStrokes()
+            clearPendingConsumerControls()
             clearConnectionAttempt()
             _state.value = ConnectionState.Error("Bluetooth HID service stopped")
         }
@@ -333,6 +357,7 @@ class HidDeviceManager(private val context: Context) {
     fun releaseAll() {
         cancelAllClickReleases()
         clearPendingKeyStrokes(releaseActiveKey = true)
+        clearPendingConsumerControls(releaseActiveControl = true)
         buttons = 0
         sendMouse(0, 0, 0, 0)
         publishDiagnostics()
@@ -350,6 +375,13 @@ class HidDeviceManager(private val context: Context) {
         if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
         pendingKeyStrokes.addLast(KeyStroke(HidReportEncoder.keyboard(modifiers, *keys), KeySource.GESTURE_ZOOM))
         sendNextKeyStroke()
+    }
+
+    /** Sends one standard Windows media/volume action through Consumer Control. */
+    fun consumer(control: ConsumerControl) {
+        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
+        pendingConsumerControls.addLast(control.bit)
+        sendNextConsumerControl()
     }
 
     fun cancelPendingZoom() {
@@ -434,6 +466,40 @@ class HidDeviceManager(private val context: Context) {
         }
     }
 
+    private fun sendNextConsumerControl() {
+        if (consumerInFlight || pendingConsumerControls.isEmpty()) return
+        val device = host
+        if (device == null || !advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
+            clearPendingConsumerControls()
+            return
+        }
+        consumerInFlight = true
+        val control = pendingConsumerControls.removeFirst()
+        sendNow(device, HidReportEncoder.CONSUMER_REPORT_ID, HidReportEncoder.consumer(control))
+        reportHandler.postDelayed(consumerReleaseRunnable, CONSUMER_HOLD_MS)
+    }
+
+    private fun releaseCurrentConsumerControl() {
+        val device = host
+        if (device != null && advancedProfile && channelOpen && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
+            sendNow(device, HidReportEncoder.CONSUMER_REPORT_ID, HidReportEncoder.consumer(0))
+        }
+        reportHandler.postDelayed(consumerNextRunnable, CONSUMER_GAP_MS)
+    }
+
+    private fun clearPendingConsumerControls(releaseActiveControl: Boolean = false) {
+        val device = host
+        val shouldRelease = releaseActiveControl && consumerInFlight && device != null && advancedProfile &&
+            channelOpen && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE
+        pendingConsumerControls.clear()
+        consumerInFlight = false
+        reportHandler.removeCallbacks(consumerReleaseRunnable)
+        reportHandler.removeCallbacks(consumerNextRunnable)
+        if (shouldRelease && device != null) {
+            sendNow(device, HidReportEncoder.CONSUMER_REPORT_ID, HidReportEncoder.consumer(0))
+        }
+    }
+
     private fun sendKeyboardNeutral() {
         val device = host
         if (device != null && advancedProfile && channelOpen && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
@@ -480,7 +546,8 @@ class HidDeviceManager(private val context: Context) {
         _diagnostics.value = HidDiagnostics(
             reportsPerSecond = reportsPerSecond,
             heldButtons = buttons,
-            queuedShortcuts = pendingKeyStrokes.size + if (keyStrokeInFlight) 1 else 0,
+            queuedShortcuts = pendingKeyStrokes.size + pendingConsumerControls.size +
+                (if (keyStrokeInFlight) 1 else 0) + (if (consumerInFlight) 1 else 0),
             failedReports = failedReports
         )
     }
@@ -725,6 +792,8 @@ class HidDeviceManager(private val context: Context) {
         const val CLICK_HOLD_MS = 28L
         const val KEY_HOLD_MS = 12L
         const val KEY_GAP_MS = 8L
+        const val CONSUMER_HOLD_MS = 24L
+        const val CONSUMER_GAP_MS = 12L
         const val HID_CHANNEL_TIMEOUT_MS = 8_000L
         const val HID_RECONNECT_DELAY_MS = 650L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L

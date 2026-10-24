@@ -8,6 +8,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore("deskpilot_settings")
+enum class MultiFingerPreset(val label: String) {
+    WINDOWS_NAVIGATION("Windows navigation"),
+    MEDIA_CONTROLS("Media controls"),
+    OFF("Off")
+}
 data class DeskSettings(
     val pointerSpeed: Float = 1.15f, val acceleration: Boolean = true, val accelerationStrength: Float = .32f,
     val precisionMultiplier: Float = .42f, val scrollSpeed: Float = .055f, val naturalScroll: Boolean = true,
@@ -15,6 +20,7 @@ data class DeskSettings(
     val haptics: Boolean = true, val keepAwake: Boolean = true, val leftHanded: Boolean = false, val darkTheme: Boolean = false,
     val extremeDark: Boolean = false, val minimalMode: Boolean = false, val scrollHaptics: Boolean = true,
     val advancedLaptopGestures: Boolean = false, val pinchToZoom: Boolean = true,
+    val multiFingerPreset: MultiFingerPreset = MultiFingerPreset.WINDOWS_NAVIGATION,
     val developerDiagnostics: Boolean = false
 )
 class SettingsRepository(private val context: Context) {
@@ -29,6 +35,7 @@ class SettingsRepository(private val context: Context) {
         val scrollHaptics = booleanPreferencesKey("scroll_haptics")
         val advancedGestures = booleanPreferencesKey("advanced_laptop_gestures")
         val pinchZoom = booleanPreferencesKey("pinch_to_zoom")
+        val multiFingerPreset = stringPreferencesKey("multi_finger_preset")
         val developerDiagnostics = booleanPreferencesKey("developer_diagnostics")
     }
     val settings: Flow<DeskSettings> = context.dataStore.data.map { p ->
@@ -37,6 +44,7 @@ class SettingsRepository(private val context: Context) {
             action(p[Key.up], DeskAction.COPY), action(p[Key.down], DeskAction.PASTE), p[Key.haptics] ?: true, p[Key.awake] ?: true,
             p[Key.left] ?: false, p[Key.dark] ?: false, p[Key.extremeDark] ?: false, p[Key.minimal] ?: false,
             p[Key.scrollHaptics] ?: true, p[Key.advancedGestures] ?: false, p[Key.pinchZoom] ?: true,
+            multiFingerPreset(p[Key.multiFingerPreset]),
             p[Key.developerDiagnostics] ?: false)
     }
     suspend fun setVolumeEnabled(value: Boolean) { context.dataStore.edit { it[Key.volume] = value } }
@@ -50,7 +58,10 @@ class SettingsRepository(private val context: Context) {
     suspend fun setScrollHaptics(value: Boolean) { context.dataStore.edit { it[Key.scrollHaptics] = value } }
     suspend fun setAdvancedLaptopGestures(value: Boolean) { context.dataStore.edit { it[Key.advancedGestures] = value } }
     suspend fun setPinchToZoom(value: Boolean) { context.dataStore.edit { it[Key.pinchZoom] = value } }
+    suspend fun setMultiFingerPreset(value: MultiFingerPreset) { context.dataStore.edit { it[Key.multiFingerPreset] = value.name } }
     suspend fun setDeveloperDiagnostics(value: Boolean) { context.dataStore.edit { it[Key.developerDiagnostics] = value } }
     suspend fun setKeepAwake(value: Boolean) { context.dataStore.edit { it[Key.awake] = value } }
     private fun action(name: String?, fallback: DeskAction) = name?.let { runCatching { DeskAction.valueOf(it) }.getOrNull() } ?: fallback
+    private fun multiFingerPreset(name: String?) = name?.let { runCatching { MultiFingerPreset.valueOf(it) }.getOrNull() }
+        ?: MultiFingerPreset.WINDOWS_NAVIGATION
 }

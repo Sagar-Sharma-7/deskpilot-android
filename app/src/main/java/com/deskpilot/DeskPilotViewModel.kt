@@ -65,11 +65,16 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         viewModelScope.launch { repository.setAdvancedLaptopGestures(enabled) }
     }
     fun setPinchToZoom(enabled: Boolean) = viewModelScope.launch { repository.setPinchToZoom(enabled) }
+    fun setMultiFingerPreset(value: MultiFingerPreset) = viewModelScope.launch { repository.setMultiFingerPreset(value) }
     fun setDeveloperDiagnostics(enabled: Boolean) = viewModelScope.launch { repository.setDeveloperDiagnostics(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
         hid.setButton(button, down)
         if (down) haptic(HapticCue.CLICK)
+    }
+    fun media(control: ConsumerControl) {
+        hid.consumer(control)
+        haptic(HapticCue.SHORTCUT)
     }
     fun isConnected() = connection.value is ConnectionState.Connected
     fun handleVolumeKey(event: KeyEvent): Boolean {
@@ -107,8 +112,36 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         haptic(if (isDoubleTap) HapticCue.DOUBLE_CLICK else HapticCue.CLICK)
     }
     override fun swipe(fingers: Int, dx: Float, dy: Float) {
-        when (fingers) { 3 -> when { dy < 0 -> execute(DeskAction.TASK_VIEW); dy > 0 -> execute(DeskAction.SHOW_DESKTOP); dx < 0 -> execute(DeskAction.SWITCH_APPS_BACK); dx > 0 -> execute(DeskAction.SWITCH_APPS) }
-            4 -> execute(if (dx < 0) DeskAction.DESKTOP_RIGHT else DeskAction.DESKTOP_LEFT) }
+        if (!settings.value.advancedLaptopGestures) return
+        val horizontal = kotlin.math.abs(dx) > kotlin.math.abs(dy)
+        when (fingers) {
+            3 -> when (settings.value.multiFingerPreset) {
+                MultiFingerPreset.MEDIA_CONTROLS -> when {
+                    horizontal && dx < 0 -> media(ConsumerControl.PREVIOUS)
+                    horizontal -> media(ConsumerControl.NEXT)
+                    dy < 0 -> media(ConsumerControl.VOLUME_UP)
+                    else -> media(ConsumerControl.VOLUME_DOWN)
+                }
+                MultiFingerPreset.WINDOWS_NAVIGATION -> when {
+                    horizontal && dx < 0 -> execute(DeskAction.SWITCH_APPS_BACK)
+                    horizontal -> execute(DeskAction.SWITCH_APPS)
+                    dy < 0 -> execute(DeskAction.TASK_VIEW)
+                    else -> execute(DeskAction.SHOW_DESKTOP)
+                }
+                MultiFingerPreset.OFF -> Unit
+            }
+            4 -> if (settings.value.multiFingerPreset != MultiFingerPreset.OFF && horizontal) {
+                execute(if (dx < 0) DeskAction.DESKTOP_LEFT else DeskAction.DESKTOP_RIGHT)
+            }
+        }
+    }
+    override fun multiFingerTap(fingers: Int) {
+        if (!settings.value.advancedLaptopGestures || fingers != 3) return
+        when (settings.value.multiFingerPreset) {
+            MultiFingerPreset.MEDIA_CONTROLS -> media(ConsumerControl.PLAY_PAUSE)
+            MultiFingerPreset.WINDOWS_NAVIGATION -> execute(DeskAction.SEARCH)
+            MultiFingerPreset.OFF -> Unit
+        }
     }
     override fun pinch(scaleDelta: Float) {
         if (!settings.value.advancedLaptopGestures || !settings.value.pinchToZoom) return

@@ -19,6 +19,10 @@ class InputEnginesTest {
         assertArrayEquals(byteArrayOf(0x03, 12, (-9).toByte(), 2, (-4).toByte()), HidReportEncoder.advancedMouse(3, 12, -9, 2, -4))
     }
 
+    @Test fun `consumer packet exposes media controls`() {
+        assertArrayEquals(byteArrayOf(HidReportEncoder.CONSUMER_VOLUME_UP.toByte()), HidReportEncoder.consumer(HidReportEncoder.CONSUMER_VOLUME_UP))
+    }
+
     @Test fun `mouse reports clamp HID relative ranges`() {
         assertArrayEquals(byteArrayOf(1, 127, -127, 127), HidReportEncoder.mouse(1, 500, -900, 500))
     }
@@ -168,6 +172,29 @@ class InputEnginesTest {
         assertTrue(sink.clicks.isEmpty())
         assertTrue(sink.cancelled)
     }
+
+    @Test fun `three finger swipe emits one directional action`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 20f, 20f), 0)
+        engine.down(TouchPoint(2, 70f, 20f), 1)
+        engine.down(TouchPoint(3, 120f, 20f), 2)
+        engine.move(listOf(TouchPoint(1, 20f, 55f), TouchPoint(2, 70f, 55f), TouchPoint(3, 120f, 55f)), 30)
+        engine.move(listOf(TouchPoint(1, 20f, 95f), TouchPoint(2, 70f, 95f), TouchPoint(3, 120f, 95f)), 45)
+        assertEquals(1, sink.swipes.size)
+        assertEquals(3, sink.swipes.single().first)
+    }
+
+    @Test fun `three finger tap is distinct from a two finger right click`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 20f, 20f), 0)
+        engine.down(TouchPoint(2, 70f, 20f), 1)
+        engine.down(TouchPoint(3, 120f, 20f), 2)
+        engine.up(1, 50)
+        engine.up(2, 55)
+        engine.up(3, 60)
+        assertEquals(listOf(3), sink.multiFingerTaps)
+        assertTrue(sink.clicks.isEmpty())
+    }
 }
 
 private class RecordingSink : GestureSink {
@@ -176,6 +203,7 @@ private class RecordingSink : GestureSink {
     val pinches = mutableListOf<Float>()
     val clicks = mutableListOf<Pair<Int, MouseButton>>()
     val swipes = mutableListOf<Pair<Int, Pair<Float, Float>>>()
+    val multiFingerTaps = mutableListOf<Int>()
     var finishCalls = 0
     var mouseDowns = 0
     var mouseUps = 0
@@ -188,6 +216,7 @@ private class RecordingSink : GestureSink {
     override fun mouseUp() { mouseUps++ }
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) { clicks += count to button }
     override fun swipe(fingers: Int, dx: Float, dy: Float) { swipes += fingers to (dx to dy) }
+    override fun multiFingerTap(fingers: Int) { multiFingerTaps += fingers }
     override fun pinch(scaleDelta: Float) { pinches += scaleDelta }
     override fun cancel() { cancelled = true }
 }
