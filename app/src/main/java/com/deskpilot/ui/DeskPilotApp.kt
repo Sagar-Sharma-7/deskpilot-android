@@ -34,6 +34,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deskpilot.DeskPilotViewModel
@@ -195,6 +197,11 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
 // visible, never reaches Windows, and lets a Backspace be observed as an edit.
 private const val REMOTE_INPUT_ANCHOR = '\u2060'
 
+private fun remoteInputValue(
+    text: String = REMOTE_INPUT_ANCHOR.toString(),
+    selection: TextRange = TextRange(text.length)
+) = TextFieldValue(text = text, selection = selection)
+
 @Composable private fun StatusDot(state: ConnectionState, modifier: Modifier = Modifier) {
     val color = when (state) { is ConnectionState.Connected -> Color(0xFF22A06B); is ConnectionState.Error, ConnectionState.PermissionRequired, ConnectionState.Unsupported -> MaterialTheme.colorScheme.error; else -> Color(0xFFE2A817) }
     Surface(modifier = modifier.padding(8.dp), shape = RoundedCornerShape(50), color = color.copy(alpha = .15f)) { Text(if (state is ConnectionState.Connected) "Connected" else "Connect", color = color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp), fontSize = 12.sp) }
@@ -291,7 +298,7 @@ private const val REMOTE_INPUT_ANCHOR = '\u2060'
     dismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var text by remember { mutableStateOf(REMOTE_INPUT_ANCHOR.toString()) }
+    var input by remember { mutableStateOf(remoteInputValue()) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
@@ -310,28 +317,44 @@ private const val REMOTE_INPUT_ANCHOR = '\u2060'
             verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
-                value = text,
+                value = input,
                 onValueChange = { next ->
-                    if (next.isEmpty()) {
+                    val anchor = REMOTE_INPUT_ANCHOR.toString()
+                    if (next.text.isEmpty()) {
                         // The user pressed Backspace while the phone's input
                         // contained only its invisible anchor. The focused
                         // Windows control can still have existing text, so
                         // forward that deletion and restore the anchor.
-                        if (text == REMOTE_INPUT_ANCHOR.toString()) {
+                        if (input.text == anchor) {
                             model.backspaceFromPhone()
                         } else {
                             // A selection can clear typed local text in one
                             // edit. Remove that text remotely but retain the
                             // local anchor for the next Backspace.
-                            model.typeFromPhone(text, REMOTE_INPUT_ANCHOR.toString())
+                            model.typeFromPhone(input.text, anchor)
                         }
-                        text = REMOTE_INPUT_ANCHOR.toString()
+                        input = remoteInputValue()
                     } else {
-                        // IMEs should preserve the anchor, but normalizing
-                        // also handles an IME that strips formatting marks.
-                        val normalized = if (next.first() == REMOTE_INPUT_ANCHOR) next else "$REMOTE_INPUT_ANCHOR$next"
-                        model.typeFromPhone(text, normalized)
-                        text = normalized
+                        val keepsAnchor = next.text.first() == REMOTE_INPUT_ANCHOR
+                        val withoutAnchor = input.text.removePrefix(anchor)
+                        if (!keepsAnchor && input.text != anchor && next.text == withoutAnchor) {
+                            // The anchor itself was deleted. Treat that as a
+                            // Windows Backspace, then restore it without
+                            // changing the visible local text.
+                            model.backspaceFromPhone()
+                        } else {
+                            val normalized = if (keepsAnchor) next.text else "$anchor${next.text}"
+                            model.typeFromPhone(input.text, normalized)
+                        }
+                        val normalizedText = if (keepsAnchor) next.text else "$anchor${next.text}"
+                        val selectionOffset = if (keepsAnchor) 0 else 1
+                        input = remoteInputValue(
+                            text = normalizedText,
+                            selection = TextRange(
+                                next.selection.start + selectionOffset,
+                                next.selection.end + selectionOffset
+                            )
+                        )
                     }
                 },
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
