@@ -31,7 +31,6 @@ sealed interface ConnectionState {
 data class HidDiagnostics(
     val reportsPerSecond: Int = 0,
     val heldButtons: Int = 0,
-    val spaceHeld: Boolean = false,
     val queuedShortcuts: Int = 0,
     val failedReports: Int = 0
 )
@@ -65,8 +64,6 @@ class HidDeviceManager(private val context: Context) {
     private val pendingKeyStrokes = ArrayDeque<KeyStroke>()
     private var keyStrokeInFlight = false
     private var activeKeySource: KeySource? = null
-    private var figmaPanActive = false
-    private var figmaPanSpaceHeld = false
     private val connectionPrefs: SharedPreferences =
         context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
@@ -96,7 +93,6 @@ class HidDeviceManager(private val context: Context) {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             this@HidDeviceManager.registered = registered
             if (!registered) {
-                finishFigmaPan()
                 channelOpen = false
                 host = null
                 clearConnectionAttempt()
@@ -155,7 +151,6 @@ class HidDeviceManager(private val context: Context) {
 
                 BluetoothProfile.STATE_DISCONNECTING -> {
                     if (host?.address == device.address) {
-                        finishFigmaPan()
                         channelOpen = false
                         _state.value = ConnectionState.Connecting(device.name ?: device.address)
                     }
@@ -163,7 +158,6 @@ class HidDeviceManager(private val context: Context) {
 
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     if (host?.address != device.address && reconnectAfterClose?.address != device.address) return
-                    finishFigmaPan()
                     channelOpen = false
                     host = null
                     cancelAllClickReleases()
@@ -211,7 +205,6 @@ class HidDeviceManager(private val context: Context) {
 
         override fun onVirtualCableUnplug(device: BluetoothDevice) {
             if (host?.address == device.address) {
-                finishFigmaPan()
                 channelOpen = false
                 host = null
                 buttons = 0
@@ -235,7 +228,6 @@ class HidDeviceManager(private val context: Context) {
         }
 
         override fun onServiceDisconnected(profile: Int) {
-            finishFigmaPan()
             hid = null
             host = null
             channelOpen = false
@@ -340,7 +332,6 @@ class HidDeviceManager(private val context: Context) {
 
     fun releaseAll() {
         cancelAllClickReleases()
-        finishFigmaPan()
         clearPendingKeyStrokes(releaseActiveKey = true)
         buttons = 0
         sendMouse(0, 0, 0, 0)
@@ -349,14 +340,14 @@ class HidDeviceManager(private val context: Context) {
 
     /** Keyboard reports exist only in the optional advanced profile. */
     fun key(modifiers: Int, vararg keys: Int) {
-        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE || figmaPanActive) return
+        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
         pendingKeyStrokes.addLast(KeyStroke(HidReportEncoder.keyboard(modifiers, *keys), KeySource.USER))
         sendNextKeyStroke()
     }
 
     /** Gesture zoom is independently cancellable and cannot drop user shortcuts. */
     fun zoomKey(modifiers: Int, vararg keys: Int) {
-        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE || figmaPanActive) return
+        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
         pendingKeyStrokes.addLast(KeyStroke(HidReportEncoder.keyboard(modifiers, *keys), KeySource.GESTURE_ZOOM))
         sendNextKeyStroke()
     }
@@ -378,42 +369,6 @@ class HidDeviceManager(private val context: Context) {
             activeKeySource = null
             sendNextKeyStroke()
         }
-    }
-
-    /** Begins a held Space + left drag only on the advanced keyboard-capable profile. */
-    fun beginFigmaPan(): Boolean {
-        if (figmaPanActive) return true
-        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE ||
-            keyStrokeInFlight || pendingKeyStrokes.isNotEmpty() || buttons != 0
-        ) return false
-        val device = host ?: return false
-        if (!sendNow(device, HidReportEncoder.KEYBOARD_REPORT_ID, HidReportEncoder.keyboard(0, HID_SPACE))) return false
-        figmaPanSpaceHeld = true
-        buttons = buttons or HidReportEncoder.LEFT
-        if (!sendNow(device, mouseReportId(), currentReport(0, 0, 0, 0))) {
-            buttons = buttons and HidReportEncoder.LEFT.inv()
-            sendKeyboardNeutral()
-            figmaPanSpaceHeld = false
-            return false
-        }
-        figmaPanActive = true
-        return true
-    }
-
-    fun figmaPanMove(dx: Int, dy: Int) {
-        if (figmaPanActive && (dx != 0 || dy != 0)) sendMouse(dx, dy, 0, 0)
-    }
-
-    /** Release the mouse first, then Space, matching the host's drag semantics. */
-    fun finishFigmaPan() {
-        if (figmaPanActive) {
-            buttons = buttons and HidReportEncoder.LEFT.inv()
-            sendMouse(0, 0, 0, 0)
-        }
-        figmaPanActive = false
-        if (figmaPanSpaceHeld) sendKeyboardNeutral()
-        figmaPanSpaceHeld = false
-        publishDiagnostics()
     }
 
     fun setDiagnosticsEnabled(enabled: Boolean) {
@@ -525,7 +480,6 @@ class HidDeviceManager(private val context: Context) {
         _diagnostics.value = HidDiagnostics(
             reportsPerSecond = reportsPerSecond,
             heldButtons = buttons,
-            spaceHeld = figmaPanSpaceHeld,
             queuedShortcuts = pendingKeyStrokes.size + if (keyStrokeInFlight) 1 else 0,
             failedReports = failedReports
         )
@@ -771,7 +725,6 @@ class HidDeviceManager(private val context: Context) {
         const val CLICK_HOLD_MS = 28L
         const val KEY_HOLD_MS = 12L
         const val KEY_GAP_MS = 8L
-        const val HID_SPACE = 0x2C
         const val HID_CHANNEL_TIMEOUT_MS = 8_000L
         const val HID_RECONNECT_DELAY_MS = 650L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L

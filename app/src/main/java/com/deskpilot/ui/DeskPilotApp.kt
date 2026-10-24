@@ -238,11 +238,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         ) { showAdvancedProfileWarning = true }
         if (settings.advancedLaptopGestures) {
             SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
-            SettingToggle("Figma precision pan", "Experimental: two-finger scroll holds Space and drags. Test it in a Figma canvas.", settings.figmaPrecisionPan, model::setFigmaPrecisionPan)
-            if (settings.figmaPrecisionPan) {
-                Text("Figma pan sensitivity ${(settings.figmaPanSensitivity * 100).toInt()}%")
-                Slider(settings.figmaPanSensitivity, model::setFigmaPanSensitivity, valueRange = .35f..2f)
-            }
         }
         SettingsHeader("Developer")
         SettingToggle("Input diagnostics", "Shows live gesture recognition and HID report information. Leave off for normal use.", settings.developerDiagnostics, model::setDeveloperDiagnostics)
@@ -256,7 +251,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             )
             Text(
                 "HID: ${hidDiagnostics.reportsPerSecond} reports/s · buttons ${hidDiagnostics.heldButtons}" +
-                    "\nSpace held ${hidDiagnostics.spaceHeld} · queued shortcuts ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
+                    "\nqueued shortcuts ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

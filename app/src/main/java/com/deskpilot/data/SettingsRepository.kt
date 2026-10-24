@@ -15,7 +15,6 @@ data class DeskSettings(
     val haptics: Boolean = true, val keepAwake: Boolean = true, val leftHanded: Boolean = false, val darkTheme: Boolean = false,
     val extremeDark: Boolean = false, val minimalMode: Boolean = false, val scrollHaptics: Boolean = true,
     val advancedLaptopGestures: Boolean = false, val pinchToZoom: Boolean = true,
-    val figmaPrecisionPan: Boolean = false, val figmaPanSensitivity: Float = 1f,
     val developerDiagnostics: Boolean = false
 )
 class SettingsRepository(private val context: Context) {
@@ -30,8 +29,6 @@ class SettingsRepository(private val context: Context) {
         val scrollHaptics = booleanPreferencesKey("scroll_haptics")
         val advancedGestures = booleanPreferencesKey("advanced_laptop_gestures")
         val pinchZoom = booleanPreferencesKey("pinch_to_zoom")
-        val figmaPrecisionPan = booleanPreferencesKey("figma_precision_pan")
-        val figmaPanSensitivity = floatPreferencesKey("figma_pan_sensitivity")
         val developerDiagnostics = booleanPreferencesKey("developer_diagnostics")
     }
     val settings: Flow<DeskSettings> = context.dataStore.data.map { p ->
@@ -40,7 +37,7 @@ class SettingsRepository(private val context: Context) {
             action(p[Key.up], DeskAction.COPY), action(p[Key.down], DeskAction.PASTE), p[Key.haptics] ?: true, p[Key.awake] ?: true,
             p[Key.left] ?: false, p[Key.dark] ?: false, p[Key.extremeDark] ?: false, p[Key.minimal] ?: false,
             p[Key.scrollHaptics] ?: true, p[Key.advancedGestures] ?: false, p[Key.pinchZoom] ?: true,
-            p[Key.figmaPrecisionPan] ?: false, p[Key.figmaPanSensitivity] ?: 1f, p[Key.developerDiagnostics] ?: false)
+            p[Key.developerDiagnostics] ?: false)
     }
     suspend fun setVolumeEnabled(value: Boolean) { context.dataStore.edit { it[Key.volume] = value } }
     suspend fun setPointerSpeed(value: Float) { context.dataStore.edit { it[Key.speed] = value } }
@@ -53,8 +50,6 @@ class SettingsRepository(private val context: Context) {
     suspend fun setScrollHaptics(value: Boolean) { context.dataStore.edit { it[Key.scrollHaptics] = value } }
     suspend fun setAdvancedLaptopGestures(value: Boolean) { context.dataStore.edit { it[Key.advancedGestures] = value } }
     suspend fun setPinchToZoom(value: Boolean) { context.dataStore.edit { it[Key.pinchZoom] = value } }
-    suspend fun setFigmaPrecisionPan(value: Boolean) { context.dataStore.edit { it[Key.figmaPrecisionPan] = value } }
-    suspend fun setFigmaPanSensitivity(value: Float) { context.dataStore.edit { it[Key.figmaPanSensitivity] = value } }
     suspend fun setDeveloperDiagnostics(value: Boolean) { context.dataStore.edit { it[Key.developerDiagnostics] = value } }
     suspend fun setKeepAwake(value: Boolean) { context.dataStore.edit { it[Key.awake] = value } }
     private fun action(name: String?, fallback: DeskAction) = name?.let { runCatching { DeskAction.valueOf(it) }.getOrNull() } ?: fallback

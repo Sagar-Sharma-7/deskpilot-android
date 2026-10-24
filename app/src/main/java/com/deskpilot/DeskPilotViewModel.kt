@@ -21,7 +21,6 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     val hidDiagnostics: StateFlow<HidDiagnostics> = hid.diagnostics
     val settings: StateFlow<DeskSettings> = repository.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DeskSettings())
     private val pointer = PointerEngine()
-    private val figmaPanPointer = PointerEngine(PointerTuning(sensitivity = 1f, acceleration = false))
     private val scroll = ScrollEngine()
     private val _dragLocked = MutableStateFlow(false)
     val dragLocked: StateFlow<Boolean> = _dragLocked.asStateFlow()
@@ -35,9 +34,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
 
     init { viewModelScope.launch { settings.collect { s ->
         pointer.updateTuning(PointerTuning(s.pointerSpeed, s.acceleration, s.accelerationStrength, s.precisionMultiplier))
-        figmaPanPointer.updateTuning(PointerTuning(s.figmaPanSensitivity, acceleration = false))
         scroll.updateSpeed(s.scrollSpeed)
-        if (!s.figmaPrecisionPan) hid.finishFigmaPan()
         gestures.setDiagnosticsEnabled(s.developerDiagnostics)
         hid.setDiagnosticsEnabled(s.developerDiagnostics)
     } } }
@@ -46,7 +43,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         hid.start(allowed)
     }
     fun close() { hid.stop(); HidForegroundService.stop(getApplication()) }
-    fun releaseInputs() { _dragLocked.value = false; hid.releaseAll(); pointer.reset(); figmaPanPointer.reset(); scroll.reset() }
+    fun releaseInputs() { _dragLocked.value = false; hid.releaseAll(); pointer.reset(); scroll.reset() }
     fun execute(action: DeskAction) {
         actions.execute(action)
         if (action != DeskAction.NO_ACTION) haptic(HapticCue.SHORTCUT)
@@ -68,8 +65,6 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         viewModelScope.launch { repository.setAdvancedLaptopGestures(enabled) }
     }
     fun setPinchToZoom(enabled: Boolean) = viewModelScope.launch { repository.setPinchToZoom(enabled) }
-    fun setFigmaPrecisionPan(enabled: Boolean) = viewModelScope.launch { repository.setFigmaPrecisionPan(enabled) }
-    fun setFigmaPanSensitivity(value: Float) = viewModelScope.launch { repository.setFigmaPanSensitivity(value) }
     fun setDeveloperDiagnostics(enabled: Boolean) = viewModelScope.launch { repository.setDeveloperDiagnostics(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
@@ -94,11 +89,6 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     override fun move(dx: Float, dy: Float) { val (x, y) = pointer.move(dx, dy); if (x != 0 || y != 0) hid.move(x, y) }
     override fun scroll(delta: ScrollDelta) {
         val settings = settings.value
-        if (settings.advancedLaptopGestures && settings.figmaPrecisionPan && hid.beginFigmaPan()) {
-            val (x, y) = figmaPanPointer.move(delta.dx, delta.dy)
-            if (x != 0 || y != 0) hid.figmaPanMove(x, y)
-            return
-        }
         val (v, h) = scroll.scroll(delta.dx, delta.dy, settings.naturalScroll)
         if (v == 0 && h == 0) return
         hid.scroll(v, h)
@@ -108,7 +98,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
             _hapticEvents.tryEmit(HapticCue.SCROLL)
         }
     }
-    override fun finishMotion() { pinchAccumulator = 0f; figmaPanPointer.reset(); hid.finishFigmaPan(); hid.discardPendingMotion() }
+    override fun finishMotion() { pinchAccumulator = 0f; hid.discardPendingMotion() }
     override fun mouseDown() { hid.setButton(HidReportEncoder.LEFT, true); haptic(HapticCue.DRAG_START) }
     override fun mouseUp() = hid.setButton(HidReportEncoder.LEFT, false)
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) {
