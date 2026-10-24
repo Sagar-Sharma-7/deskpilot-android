@@ -212,6 +212,8 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 @Composable private fun SettingsScreen(model: DeskPilotViewModel, settings: DeskSettings, back: () -> Unit) {
     var showAdvancedProfileWarning by rememberSaveable { mutableStateOf(false) }
+    val gestureDiagnostics by model.gestureDiagnostics.collectAsState()
+    val hidDiagnostics by model.hidDiagnostics.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         TextButton(onClick = back) { Text("← Trackpad") }; Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
@@ -241,6 +243,22 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                 Text("Figma pan sensitivity ${(settings.figmaPanSensitivity * 100).toInt()}%")
                 Slider(settings.figmaPanSensitivity, model::setFigmaPanSensitivity, valueRange = .35f..2f)
             }
+        }
+        SettingsHeader("Developer")
+        SettingToggle("Input diagnostics", "Shows live gesture recognition and HID report information. Leave off for normal use.", settings.developerDiagnostics, model::setDeveloperDiagnostics)
+        if (settings.developerDiagnostics) {
+            Text(
+                "Gesture: ${gestureDiagnostics.state} · pointers ${gestureDiagnostics.pointerCount}" +
+                    "\ncentroid ${"%.1f".format(gestureDiagnostics.centroidDx)}, ${"%.1f".format(gestureDiagnostics.centroidDy)} · separation ${"%.1f".format(gestureDiagnostics.separationDelta)}" +
+                    "\nscroll ${"%.1f".format(gestureDiagnostics.scrollDx)}, ${"%.1f".format(gestureDiagnostics.scrollDy)} · pinch ${"%.3f".format(gestureDiagnostics.pinchDelta)}" +
+                    "\nrecognition ${gestureDiagnostics.recognitionLatencyMs ?: "—"} ms · cancellations ${gestureDiagnostics.cancellations}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "HID: ${hidDiagnostics.reportsPerSecond} reports/s · buttons ${hidDiagnostics.heldButtons}" +
+                    "\nSpace held ${hidDiagnostics.spaceHeld} · queued shortcuts ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }

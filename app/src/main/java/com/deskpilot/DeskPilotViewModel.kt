@@ -18,6 +18,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     private val repository = SettingsRepository(app)
     private val hid = (app as DeskPilotApplication).hidDeviceManager
     val connection: StateFlow<ConnectionState> = hid.state
+    val hidDiagnostics: StateFlow<HidDiagnostics> = hid.diagnostics
     val settings: StateFlow<DeskSettings> = repository.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DeskSettings())
     private val pointer = PointerEngine()
     private val figmaPanPointer = PointerEngine(PointerTuning(sensitivity = 1f, acceleration = false))
@@ -30,12 +31,15 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     private var pinchAccumulator = 0f
     private val actions = ActionRegistry(hid, ::togglePrecision, ::toggleDragLock)
     val gestures = GestureEngine(this, GestureEngine.Config(density = app.resources.displayMetrics.density))
+    val gestureDiagnostics: StateFlow<GestureDiagnostics> = gestures.diagnostics
 
     init { viewModelScope.launch { settings.collect { s ->
         pointer.updateTuning(PointerTuning(s.pointerSpeed, s.acceleration, s.accelerationStrength, s.precisionMultiplier))
         figmaPanPointer.updateTuning(PointerTuning(s.figmaPanSensitivity, acceleration = false))
         scroll.updateSpeed(s.scrollSpeed)
         if (!s.figmaPrecisionPan) hid.finishFigmaPan()
+        gestures.setDiagnosticsEnabled(s.developerDiagnostics)
+        hid.setDiagnosticsEnabled(s.developerDiagnostics)
     } } }
     fun startBluetooth(allowed: Boolean) {
         if (allowed) HidForegroundService.start(getApplication())
@@ -66,6 +70,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     fun setPinchToZoom(enabled: Boolean) = viewModelScope.launch { repository.setPinchToZoom(enabled) }
     fun setFigmaPrecisionPan(enabled: Boolean) = viewModelScope.launch { repository.setFigmaPrecisionPan(enabled) }
     fun setFigmaPanSensitivity(value: Float) = viewModelScope.launch { repository.setFigmaPanSensitivity(value) }
+    fun setDeveloperDiagnostics(enabled: Boolean) = viewModelScope.launch { repository.setDeveloperDiagnostics(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
         hid.setButton(button, down)

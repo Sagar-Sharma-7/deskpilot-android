@@ -1,5 +1,7 @@
 package com.deskpilot.input
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -9,6 +11,19 @@ data class TouchPoint(val id: Int, val x: Float, val y: Float)
 
 /** A semantic two-finger scroll sample, before the HID layer quantises it. */
 data class ScrollDelta(val dx: Float, val dy: Float, val timestamp: Long)
+
+data class GestureDiagnostics(
+    val state: GestureState = GestureState.IDLE,
+    val pointerCount: Int = 0,
+    val recognitionLatencyMs: Long? = null,
+    val centroidDx: Float = 0f,
+    val centroidDy: Float = 0f,
+    val separationDelta: Float = 0f,
+    val scrollDx: Float = 0f,
+    val scrollDy: Float = 0f,
+    val pinchDelta: Float = 0f,
+    val cancellations: Int = 0
+)
 
 interface GestureSink {
     fun move(dx: Float, dy: Float)
@@ -49,6 +64,9 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
 
     var state: GestureState = GestureState.IDLE
         private set
+    private val _diagnostics = MutableStateFlow(GestureDiagnostics())
+    val diagnostics: StateFlow<GestureDiagnostics> = _diagnostics
+    private var diagnosticsEnabled = false
 
     private var points = emptyMap<Int, TouchPoint>()
     private var start = emptyMap<Int, TouchPoint>()
@@ -67,6 +85,19 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     private var pendingDx = 0f
     private var pendingDy = 0f
     private var twoFingerMotionFinished = false
+    private var recognitionLatencyMs: Long? = null
+    private var lastCentroidDx = 0f
+    private var lastCentroidDy = 0f
+    private var lastSeparationDelta = 0f
+    private var lastScrollDx = 0f
+    private var lastScrollDy = 0f
+    private var lastPinchDelta = 0f
+    private var cancellationCount = 0
+
+    fun setDiagnosticsEnabled(enabled: Boolean) {
+        diagnosticsEnabled = enabled
+        publishDiagnostics()
+    }
 
     fun down(point: TouchPoint, time: Long) {
         val firstFinger = points.isEmpty()
@@ -82,12 +113,14 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
             dragging = doubleTapDrag
             state = GestureState.POINTER
             if (dragging) sink.mouseDown()
+            publishDiagnostics()
             return
         }
 
         start = points
         maxFingers = max(maxFingers, points.size)
         if (points.size == 2) beginTwoFingerGesture()
+        publishDiagnostics()
     }
 
     /** Historical MotionEvent samples are supplied before the current sample. */
@@ -107,6 +140,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                 state = GestureState.POINTER
             }
         }
+        publishDiagnostics()
     }
 
     fun up(id: Int, time: Long) {
@@ -122,6 +156,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         if (points.isNotEmpty()) {
             start = points
             if (points.size == 1) state = GestureState.POINTER
+            publishDiagnostics()
             return
         }
 
@@ -139,12 +174,15 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
             }
         }
         reset()
+        publishDiagnostics()
     }
 
     fun cancel() {
         if (dragging) sink.mouseUp()
         sink.cancel()
+        cancellationCount++
         reset()
+        publishDiagnostics()
     }
 
     private fun movePointer(next: Map<Int, TouchPoint>, previous: Map<Int, TouchPoint>) {
@@ -166,6 +204,12 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         val dy = centroid.second - twoFingerLastCenter.second
         val distance = distance(first, second)
         val separationDelta = distance - twoFingerLastDistance
+        lastCentroidDx = dx
+        lastCentroidDy = dy
+        lastSeparationDelta = separationDelta
+        lastScrollDx = 0f
+        lastScrollDy = 0f
+        lastPinchDelta = 0f
 
         // Kept separate from the centroid: one finger may be nearly stationary.
         val firstDx = first.x - oldFirst.x
@@ -186,7 +230,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         ) state = GestureState.TWO_FINGER_PENDING
 
         val classifiedNow = if (state == GestureState.TWO_FINGER_PENDING || state == GestureState.TWO_FINGER_TAP_CANDIDATE) {
-            classifyTwoFingerGesture(fingerVelocityAgreement, distance)
+            classifyTwoFingerGesture(fingerVelocityAgreement, distance, time)
         } else false
 
         when (state) {
@@ -197,18 +241,21 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                 pendingDy = 0f
                 if (bufferedDx != 0f || bufferedDy != 0f) {
                     moved = true
+                    lastScrollDx = bufferedDx
+                    lastScrollDy = bufferedDy
                     sink.scroll(ScrollDelta(bufferedDx, bufferedDy, time))
                 }
             }
             GestureState.TWO_FINGER_PINCH -> if (!classifiedNow && separationDelta != 0f) {
                 moved = true
+                lastPinchDelta = separationDelta / PINCH_DISTANCE_SCALE
                 sink.pinch(separationDelta / PINCH_DISTANCE_SCALE)
             }
             else -> Unit
         }
     }
 
-    private fun classifyTwoFingerGesture(fingerVelocityAgreement: Float, distance: Float): Boolean {
+    private fun classifyTwoFingerGesture(fingerVelocityAgreement: Float, distance: Float, time: Long): Boolean {
         val translationScore = translationEvidence / config.scrollActivationSlop
         val scaleScore = scaleEvidence / config.pinchActivationSlop
         if (translationScore < 1f && scaleScore < 1f) return false
@@ -220,16 +267,19 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
             (scaleScore >= 1f && fingerVelocityAgreement < 0f && scaleScore >= translationScore)
         if (pinchWins) {
             state = GestureState.TWO_FINGER_PINCH
+            recognitionLatencyMs = time - startedAt
             pendingDx = 0f
             pendingDy = 0f
             val totalChange = distance - twoFingerStartDistance
             val overshoot = (abs(totalChange) - config.pinchActivationSlop).coerceAtLeast(0f) * sign(totalChange)
             if (overshoot != 0f) {
                 moved = true
+                lastPinchDelta = overshoot / PINCH_DISTANCE_SCALE
                 sink.pinch(overshoot / PINCH_DISTANCE_SCALE)
             }
         } else if (translationScore >= 1f) {
             state = GestureState.TWO_FINGER_SCROLL
+            recognitionLatencyMs = time - startedAt
         }
         return state == GestureState.TWO_FINGER_SCROLL || state == GestureState.TWO_FINGER_PINCH
     }
@@ -256,7 +306,24 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         pendingDx = 0f
         pendingDy = 0f
         twoFingerMotionFinished = false
+        recognitionLatencyMs = null
         state = GestureState.IDLE
+    }
+
+    private fun publishDiagnostics() {
+        if (!diagnosticsEnabled) return
+        _diagnostics.value = GestureDiagnostics(
+            state = state,
+            pointerCount = points.size,
+            recognitionLatencyMs = recognitionLatencyMs,
+            centroidDx = lastCentroidDx,
+            centroidDy = lastCentroidDy,
+            separationDelta = lastSeparationDelta,
+            scrollDx = lastScrollDx,
+            scrollDy = lastScrollDy,
+            pinchDelta = lastPinchDelta,
+            cancellations = cancellationCount
+        )
     }
 
     private fun distanceBetweenFirstTwo(): Float = points.values.take(2).let { values ->

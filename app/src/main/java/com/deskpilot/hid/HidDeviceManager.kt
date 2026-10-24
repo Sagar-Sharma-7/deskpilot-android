@@ -11,6 +11,7 @@ import android.content.SharedPreferences
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +27,14 @@ sealed interface ConnectionState {
     data class Connected(val name: String) : ConnectionState
     data class Error(val message: String) : ConnectionState
 }
+
+data class HidDiagnostics(
+    val reportsPerSecond: Int = 0,
+    val heldButtons: Int = 0,
+    val spaceHeld: Boolean = false,
+    val queuedShortcuts: Int = 0,
+    val failedReports: Int = 0
+)
 
 /**
  * The deliberately small Bluetooth HID transport used by DeskPilot.
@@ -62,6 +71,13 @@ class HidDeviceManager(private val context: Context) {
         context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
     val state: StateFlow<ConnectionState> = _state
+    private val _diagnostics = MutableStateFlow(HidDiagnostics())
+    val diagnostics: StateFlow<HidDiagnostics> = _diagnostics
+    private var diagnosticsEnabled = false
+    private var reportsInWindow = 0
+    private var reportWindowStartedAt = 0L
+    private var reportsPerSecond = 0
+    private var failedReports = 0
     private val executor: Executor = context.mainExecutor
     private val keyStrokeReleaseRunnable = Runnable { releaseCurrentKeyStroke() }
     private val keyStrokeNextRunnable = Runnable {
@@ -306,6 +322,7 @@ class HidDeviceManager(private val context: Context) {
         cancelPendingClickRelease(button)
         buttons = if (down) buttons or button else buttons and button.inv()
         sendMouse(0, 0, 0, 0)
+        publishDiagnostics()
     }
 
     fun click(button: Int) {
@@ -327,6 +344,7 @@ class HidDeviceManager(private val context: Context) {
         clearPendingKeyStrokes(releaseActiveKey = true)
         buttons = 0
         sendMouse(0, 0, 0, 0)
+        publishDiagnostics()
     }
 
     /** Keyboard reports exist only in the optional advanced profile. */
@@ -395,6 +413,12 @@ class HidDeviceManager(private val context: Context) {
         figmaPanActive = false
         if (figmaPanSpaceHeld) sendKeyboardNeutral()
         figmaPanSpaceHeld = false
+        publishDiagnostics()
+    }
+
+    fun setDiagnosticsEnabled(enabled: Boolean) {
+        diagnosticsEnabled = enabled
+        publishDiagnostics()
     }
 
     fun discardPendingMotion() = cancelPendingZoom()
@@ -473,12 +497,38 @@ class HidDeviceManager(private val context: Context) {
             hid?.sendReport(device, reportId, data) == true
         } catch (error: RuntimeException) {
             reportBluetoothFailure("This phone rejected the HID input report", error)
+            recordReport(accepted = false)
             return false
         }
+        recordReport(accepted)
         if (accepted) return true
         channelOpen = false
         _state.value = ConnectionState.Error("Windows is not accepting DeskPilot mouse reports")
         return false
+    }
+
+    private fun recordReport(accepted: Boolean) {
+        if (!diagnosticsEnabled) return
+        val now = SystemClock.uptimeMillis()
+        if (reportWindowStartedAt == 0L) reportWindowStartedAt = now
+        if (now - reportWindowStartedAt >= REPORT_RATE_WINDOW_MS) {
+            reportsPerSecond = (reportsInWindow * 1_000L / (now - reportWindowStartedAt)).toInt()
+            reportsInWindow = 0
+            reportWindowStartedAt = now
+        }
+        if (accepted) reportsInWindow++ else failedReports++
+        publishDiagnostics()
+    }
+
+    private fun publishDiagnostics() {
+        if (!diagnosticsEnabled) return
+        _diagnostics.value = HidDiagnostics(
+            reportsPerSecond = reportsPerSecond,
+            heldButtons = buttons,
+            spaceHeld = figmaPanSpaceHeld,
+            queuedShortcuts = pendingKeyStrokes.size + if (keyStrokeInFlight) 1 else 0,
+            failedReports = failedReports
+        )
     }
 
     /**
@@ -726,5 +776,6 @@ class HidDeviceManager(private val context: Context) {
         const val HID_RECONNECT_DELAY_MS = 650L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
         const val PROFILE_REFRESH_DELAY_MS = 350L
+        const val REPORT_RATE_WINDOW_MS = 1_000L
     }
 }
