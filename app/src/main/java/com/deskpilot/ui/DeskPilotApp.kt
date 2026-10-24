@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.foundation.BorderStroke
@@ -362,9 +363,12 @@ private fun remoteInputValue(
                 minLines = 1,
                 maxLines = 2,
                 // A multiline field with no IME action keeps the phone's Enter
-                // key available. Its newline is sent as a HID Enter report.
+                // key available. Its newline is sent as HID Shift+Enter.
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.None)
             )
+            IconButton(onClick = model::submitFromPhone) {
+                Icon(Icons.Filled.KeyboardReturn, contentDescription = "Send Enter to Windows")
+            }
             IconButton(onClick = { keyboard?.hide(); dismiss() }) {
                 Icon(Icons.Filled.Close, contentDescription = "Close keyboard input")
             }

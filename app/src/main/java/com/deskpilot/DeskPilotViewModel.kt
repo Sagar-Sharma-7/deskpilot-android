@@ -107,8 +107,25 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         repeat(removed.count { HidReportEncoder.keyboardUsage(it) != null }) {
             hid.key(0, HidReportEncoder.HID_BACKSPACE)
         }
-        next.substring(prefix, next.length - suffix).forEach { character ->
-            HidReportEncoder.keyboardUsage(character)?.let { usage -> hid.key(usage.modifiers, usage.key) }
+        val inserted = next.substring(prefix, next.length - suffix)
+        inserted.forEachIndexed { index, character ->
+            // Some IMEs represent one line break as CRLF. It is still one
+            // Windows Shift+Enter, not two separate new lines.
+            if (character == '\r' && inserted.getOrNull(index + 1) == '\n') return@forEachIndexed
+            if (character == '\n' || character == '\r') {
+                // The phone's Enter is reserved for writing another line.
+                // Windows apps conventionally interpret Shift+Enter as a
+                // newline rather than submitting the current prompt.
+                hid.key(HidReportEncoder.HID_LEFT_SHIFT, HidReportEncoder.HID_ENTER)
+            } else {
+                HidReportEncoder.keyboardUsage(character)?.let { usage -> hid.key(usage.modifiers, usage.key) }
+            }
+        }
+    }
+    /** Deliberately submits the current Windows field with a plain Enter. */
+    fun submitFromPhone() {
+        if (settings.value.advancedLaptopGestures && isConnected()) {
+            hid.key(0, HidReportEncoder.HID_ENTER)
         }
     }
     /** Sends deletion even when the phone's local input field is already empty. */
