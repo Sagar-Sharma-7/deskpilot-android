@@ -29,6 +29,7 @@ DeskPilot can also initiate a connection to the paired Windows HID host. Keep it
 - A second tap followed by movement starts a drag. The on-screen buttons also support press-and-hold drag.
 - Two fingers scroll vertically and horizontally. Pinch sends Ctrl + / Ctrl -.
 - Advanced profile: configure every three-, four-, and five-finger swipe or tap independently. The defaults follow Windows navigation (Task View/Desktop/app switching and desktop switching); five-finger gestures begin with no action.
+- The keyboard button beside the mouse buttons opens the phone's normal keyboard and sends basic Latin text, punctuation, Backspace, Tab, and Enter to the focused Windows field. It is available only while the advanced HID profile is connected.
 - The compact media strip offers mute, previous, play/pause, next, and a 50-detent haptic volume-adjustment control above the trackpad. Dragging it fully down/up sends enough standard reports to clamp Windows volume to its actual minimum/maximum. Assigning volume to a multi-finger gesture makes it continuous while the fingers keep moving. Standard Bluetooth media reports still cannot read the PC's current absolute volume for intermediate slider positions.
 - The action bar sends shortcuts to the focused Windows application. Copy and Paste are Windows Ctrl+C/Ctrl+V, not Android clipboard operations.
 - Volume shortcuts are opt-in, run only while DeskPilot is foreground and connected, and ignore Android key repeats. Disabling them restores normal volume behavior.
@@ -54,3 +55,4 @@ Android does not expose the protected power button to normal apps. DeskPilot inc
 7. During a drag, turn Bluetooth off or background the app, reconnect, and confirm no mouse or modifier is stuck.
 8. With Advanced laptop gestures enabled, test slow and fast two-finger vertical, horizontal, and diagonal movement in Chrome, Windows Settings, and File Explorer. Confirm a pinch never scrolls and a scroll never zooms.
 9. After re-pairing the advanced profile, test each media-strip button and its haptic volume steps. Choose a few custom multi-finger assignments and verify one swipe or tap results in exactly one selected action.
+10. Focus a text field in Windows, open DeskPilot's keyboard button, and type letters, punctuation, Backspace, Tab, and Enter. Verify the text appears only in the focused Windows field.

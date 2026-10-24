@@ -91,6 +91,26 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         hid.volume(control)
         haptic(HapticCue.VOLUME_STEP)
     }
+    /** Mirrors edits from the phone IME to the focused Windows control. */
+    fun typeFromPhone(previous: String, next: String) {
+        if (!settings.value.advancedLaptopGestures || !isConnected()) return
+        var prefix = 0
+        val prefixLimit = minOf(previous.length, next.length)
+        while (prefix < prefixLimit && previous[prefix] == next[prefix]) prefix++
+        var suffix = 0
+        while (
+            suffix < previous.length - prefix && suffix < next.length - prefix &&
+            previous[previous.length - suffix - 1] == next[next.length - suffix - 1]
+        ) suffix++
+
+        val removed = previous.substring(prefix, previous.length - suffix)
+        repeat(removed.count { HidReportEncoder.keyboardUsage(it) != null }) {
+            hid.key(0, HidReportEncoder.HID_BACKSPACE)
+        }
+        next.substring(prefix, next.length - suffix).forEach { character ->
+            HidReportEncoder.keyboardUsage(character)?.let { usage -> hid.key(usage.modifiers, usage.key) }
+        }
+    }
     fun isConnected() = connection.value is ConnectionState.Connected
     fun handleVolumeKey(event: KeyEvent): Boolean {
         val s = settings.value

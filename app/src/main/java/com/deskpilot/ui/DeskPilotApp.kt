@@ -8,11 +8,13 @@ import android.view.WindowManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,11 +24,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deskpilot.DeskPilotViewModel
@@ -82,6 +88,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 @Composable private fun TrackpadScreen(model: DeskPilotViewModel, settings: DeskSettings, openSettings: () -> Unit, openConnect: () -> Unit) {
     val state by model.connection.collectAsState()
     val view = LocalView.current
+    var showKeyboard by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(model, view) {
         model.hapticEvents.collect { cue ->
             val effect = when (cue) {
@@ -112,8 +119,14 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         }
         Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
         Spacer(Modifier.height(8.dp))
-        MouseButtons(model, settings.leftHanded)
+        MouseButtons(
+            model = model,
+            leftHanded = settings.leftHanded,
+            keyboardEnabled = settings.advancedLaptopGestures && state is ConnectionState.Connected,
+            openKeyboard = { showKeyboard = true }
+        )
     }
+    if (showKeyboard) RemoteKeyboardDialog(model) { showKeyboard = false }
 }
 
 @Composable private fun MediaControls(model: DeskPilotViewModel) {
@@ -216,7 +229,12 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     }
 }
 
-@Composable private fun MouseButtons(model: DeskPilotViewModel, leftHanded: Boolean) {
+@Composable private fun MouseButtons(
+    model: DeskPilotViewModel,
+    leftHanded: Boolean,
+    keyboardEnabled: Boolean,
+    openKeyboard: () -> Unit
+) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (leftHanded) {
@@ -226,6 +244,7 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
                 HoldButton("Left click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.LEFT, true) }, { model.setMouseButton(HidReportEncoder.LEFT, false) })
                 HoldButton("Right click", Modifier.weight(1f), { model.setMouseButton(HidReportEncoder.RIGHT, true) }, { model.setMouseButton(HidReportEncoder.RIGHT, false) })
             }
+            KeyboardButton(enabled = keyboardEnabled, openKeyboard = openKeyboard)
         }
     }
 }
@@ -238,6 +257,53 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     }, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
         Box(contentAlignment = Alignment.Center) { Text(label) }
     }
+}
+
+@Composable private fun KeyboardButton(enabled: Boolean, openKeyboard: () -> Unit) {
+    Surface(
+        modifier = Modifier.size(56.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        IconButton(onClick = openKeyboard, enabled = enabled) {
+            Icon(Icons.Filled.Keyboard, contentDescription = "Open phone keyboard")
+        }
+    }
+}
+
+@Composable private fun RemoteKeyboardDialog(model: DeskPilotViewModel, dismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Type on Windows") },
+        text = {
+            Column {
+                Text("Use your phone keyboard. Typed basic Latin characters are sent to the focused Windows field.", fontSize = 13.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { next ->
+                        model.typeFromPhone(text, next)
+                        text = next
+                    },
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                    label = { Text("Keyboard input") },
+                    minLines = 2,
+                    maxLines = 3,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { keyboard?.hide(); dismiss() }) { Text("Done") }
+        }
+    )
 }
 
 @Composable private fun ConnectScreen(model: DeskPilotViewModel, back: () -> Unit, request: () -> Unit, makeDiscoverable: () -> Unit) {

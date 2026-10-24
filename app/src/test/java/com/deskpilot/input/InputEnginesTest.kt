@@ -3,6 +3,7 @@ package com.deskpilot.input
 import com.deskpilot.hid.HidReportEncoder
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,6 +22,13 @@ class InputEnginesTest {
 
     @Test fun `consumer packet exposes media controls`() {
         assertArrayEquals(byteArrayOf(HidReportEncoder.CONSUMER_VOLUME_UP.toByte()), HidReportEncoder.consumer(HidReportEncoder.CONSUMER_VOLUME_UP))
+    }
+
+    @Test fun `keyboard mapper supports basic phone text input`() {
+        assertEquals(HidReportEncoder.KeyboardUsage(0, 0x04), HidReportEncoder.keyboardUsage('a'))
+        assertEquals(HidReportEncoder.KeyboardUsage(HidReportEncoder.HID_LEFT_SHIFT, 0x04), HidReportEncoder.keyboardUsage('A'))
+        assertEquals(HidReportEncoder.KeyboardUsage(0, HidReportEncoder.HID_ENTER), HidReportEncoder.keyboardUsage('\n'))
+        assertNull(HidReportEncoder.keyboardUsage('😀'.first()))
     }
 
     @Test fun `mouse reports clamp HID relative ranges`() {
