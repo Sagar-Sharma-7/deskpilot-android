@@ -5,6 +5,9 @@ import android.content.Intent
 import android.provider.Settings
 import android.view.MotionEvent
 import android.view.WindowManager
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -114,7 +117,9 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 @Composable private fun MediaControls(model: DeskPilotViewModel) {
     var volumePosition by remember { mutableFloatStateOf(.5f) }
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        // Keep the slider well inside Android's left/right system-back zones.
+        // The app must not exclude those gestures: Back should still work.
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
@@ -363,7 +368,11 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
                     Text(title, fontWeight = FontWeight.SemiBold)
                     Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(if (expanded) "⌃" else "⌄", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (expanded) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f))
@@ -388,7 +397,11 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text("$title gestures", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
-        Text(if (expanded) "⌃" else "⌄", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = if (expanded) "Collapse $title gestures" else "Expand $title gestures",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
     if (expanded) slots.forEach { slot -> MultiFingerActionRow(slot, bindings[slot]) { select(slot, it) } }
 }
