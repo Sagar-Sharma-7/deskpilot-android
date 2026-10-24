@@ -28,6 +28,7 @@ DeskPilot can also initiate a connection to the paired Windows HID host. Keep it
 - Two-finger tap is right click; three-finger tap is middle click.
 - A second tap followed by movement starts a drag. The on-screen buttons also support press-and-hold drag.
 - Two fingers scroll vertically and horizontally. Pinch sends Ctrl + / Ctrl -.
+- Advanced laptop gestures includes an opt-in **Figma precision pan** experiment. When enabled, a recognised two-finger scroll holds Space and the left mouse button, then maps centroid motion to a drag. It is intended only for a Figma canvas; turn it off for ordinary wheel scrolling.
 - Three fingers: up Task View, down Show Desktop, sideways Alt+Tab. Four fingers switch virtual desktops.
 - The action bar sends shortcuts to the focused Windows application. Copy and Paste are Windows Ctrl+C/Ctrl+V, not Android clipboard operations.
 - Volume shortcuts are opt-in, run only while DeskPilot is foreground and connected, and ignore Android key repeats. Disabling them restores normal volume behavior.
@@ -35,6 +36,8 @@ DeskPilot can also initiate a connection to the paired Windows HID host. Keep it
 ## Important limitations / device validation
 
 `BluetoothHidDevice` availability and the Windows HID connection flow are device/OEM dependent. The correct Android API path and composite mouse/keyboard descriptor are implemented, but final HID behavior must be verified on the Galaxy S23 Ultra and Galaxy Book3 Pro 360. Windows receives ordinary HID wheel reports, which are not equivalent to native Windows Precision Touchpad gestures; horizontal wheel support also depends on the focused Windows app.
+
+This release deliberately keeps the existing standard HID descriptor. A previous high-resolution wheel descriptor experiment was reverted after it caused unstable scrolling, so true high-resolution wheel support remains a separate, re-pairing-required experiment rather than part of the stable profile.
 
 Android does not expose the protected power button to normal apps. DeskPilot includes Samsung Side-button guidance but does not claim to override it. Configure **Settings → Advanced features → Side button → Double press → Open app → DeskPilot** if available on the device.
 
@@ -47,3 +50,5 @@ Android does not expose the protected power button to normal apps. DeskPilot inc
 5. Confirm Copy/Paste and action-bar shortcuts affect Windows, not the phone.
 6. Enable volume shortcuts, test Copy/Paste once per press, then disable them and verify phone volume works normally.
 7. During a drag, turn Bluetooth off or background the app, reconnect, and confirm no mouse or modifier is stuck.
+8. With Advanced laptop gestures enabled, test slow and fast two-finger vertical, horizontal, and diagonal movement in Chrome, Windows Settings, and File Explorer. Confirm a pinch never scrolls and a scroll never zooms.
+9. In a Figma desktop canvas and then Figma in Chrome, enable Figma precision pan. Confirm two fingers pan smoothly, a two-finger tap does not pan, and lifting either finger releases the drag. Disable it again and confirm normal wheel scrolling still works.

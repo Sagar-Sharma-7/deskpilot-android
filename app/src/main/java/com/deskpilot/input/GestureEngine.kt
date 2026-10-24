@@ -2,12 +2,17 @@ package com.deskpilot.input
 
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.sign
 
 data class TouchPoint(val id: Int, val x: Float, val y: Float)
 
+/** A semantic two-finger scroll sample, before the HID layer quantises it. */
+data class ScrollDelta(val dx: Float, val dy: Float, val timestamp: Long)
+
 interface GestureSink {
     fun move(dx: Float, dy: Float)
-    fun scroll(dx: Float, dy: Float)
+    fun scroll(delta: ScrollDelta)
     fun finishMotion()
     fun mouseDown()
     fun mouseUp()
@@ -19,17 +24,31 @@ interface GestureSink {
 
 enum class MouseButton { LEFT, RIGHT, MIDDLE }
 
+/** Exposed for the optional developer diagnostics. */
+enum class GestureState { IDLE, POINTER, TWO_FINGER_TAP_CANDIDATE, TWO_FINGER_PENDING, TWO_FINGER_SCROLL, TWO_FINGER_PINCH }
+
 /**
- * Small, predictable touchpad gesture set:
- * one finger moves/taps, two fingers scroll, and a two-finger tap right-clicks.
- * A quick second tap held while moving begins the standard text-selection drag.
+ * Predictable touchpad gestures with a small evidence window for two fingers.
+ * Translation and separation are accumulated independently. This recognises a
+ * pinch even when one finger is nearly stationary, while tolerating the small
+ * separation changes that occur during a normal two-finger scroll.
  */
 class GestureEngine(private val sink: GestureSink, private val config: Config = Config()) {
     data class Config(
-        val tapSlop: Float = 18f,
+        val density: Float = 1f,
+        val tapSlopDp: Float = 6f,
+        val scrollActivationDp: Float = 3.5f,
+        val pinchActivationDp: Float = 5f,
         val tapTimeoutMs: Long = 280,
         val doubleTapDragTimeoutMs: Long = 900
-    )
+    ) {
+        val tapSlop get() = tapSlopDp * density
+        val scrollActivationSlop get() = scrollActivationDp * density
+        val pinchActivationSlop get() = pinchActivationDp * density
+    }
+
+    var state: GestureState = GestureState.IDLE
+        private set
 
     private var points = emptyMap<Int, TouchPoint>()
     private var start = emptyMap<Int, TouchPoint>()
@@ -38,106 +57,54 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     private var moved = false
     private var lastTapAt = Long.MIN_VALUE
     private var lastTap: TouchPoint? = null
-    private var doubleTapDragCandidate = false
     private var dragging = false
-    private var twoFingerMode = TwoFingerMode.UNDECIDED
-    private var twoFingerStartDistance = 0f
-    private var twoFingerLastPinchDistance = 0f
-    private var twoFingerStartCenter = 0f to 0f
 
-    private enum class TwoFingerMode { UNDECIDED, SCROLL, PINCH }
+    private var twoFingerStartDistance = 0f
+    private var twoFingerLastDistance = 0f
+    private var twoFingerLastCenter = 0f to 0f
+    private var translationEvidence = 0f
+    private var scaleEvidence = 0f
+    private var pendingDx = 0f
+    private var pendingDy = 0f
+    private var twoFingerMotionFinished = false
 
     fun down(point: TouchPoint, time: Long) {
         val firstFinger = points.isEmpty()
         points = points + (point.id to point)
         if (firstFinger) {
-            doubleTapDragCandidate = time - lastTapAt <= config.doubleTapDragTimeoutMs && lastTap?.let {
-                hypot((point.x - it.x).toDouble(), (point.y - it.y).toDouble()).toFloat() < config.tapSlop
+            val doubleTapDrag = time - lastTapAt <= config.doubleTapDragTimeoutMs && lastTap?.let {
+                distance(point, it) < config.tapSlop
             } == true
             start = points
             startedAt = time
             maxFingers = 1
             moved = false
-            dragging = doubleTapDragCandidate
-            // Hold the second tap immediately. This preserves the anchor point
-            // for Windows text selection instead of waiting for a later move.
+            dragging = doubleTapDrag
+            state = GestureState.POINTER
             if (dragging) sink.mouseDown()
-        } else {
-            start = points
-            maxFingers = maxOf(maxFingers, points.size)
-            doubleTapDragCandidate = false
-            if (points.size == 2) {
-                twoFingerStartDistance = distanceBetweenFirstTwo()
-                twoFingerLastPinchDistance = twoFingerStartDistance
-                twoFingerStartCenter = center()
-                twoFingerMode = TwoFingerMode.UNDECIDED
-            }
+            return
         }
+
+        start = points
+        maxFingers = max(maxFingers, points.size)
+        if (points.size == 2) beginTwoFingerGesture()
     }
 
+    /** Historical MotionEvent samples are supplied before the current sample. */
     fun move(current: List<TouchPoint>, time: Long) {
+        if (current.isEmpty()) return
         val next = current.associateBy { it.id }
-        if (next.isEmpty()) return
         val previous = points
         points = next
-        maxFingers = maxOf(maxFingers, next.size)
-        when {
-            next.size == 1 && previous.size == 1 -> {
-                val point = next.values.first()
-                val old = previous[point.id] ?: return
-                val total = start[point.id]?.let { hypot((point.x - it.x).toDouble(), (point.y - it.y).toDouble()).toFloat() } ?: 0f
-                if (total > config.tapSlop) moved = true
-                sink.move(point.x - old.x, point.y - old.y)
-            }
+        maxFingers = max(maxFingers, next.size)
 
-            next.size == 2 && previous.size == 2 -> {
-                val ids = next.keys.sorted()
-                val first = next.getValue(ids[0])
-                val second = next.getValue(ids[1])
-                val oldFirst = previous[ids[0]] ?: return
-                val oldSecond = previous[ids[1]] ?: return
-                val dx = ((first.x - oldFirst.x) + (second.x - oldSecond.x)) / 2f
-                val dy = ((first.y - oldFirst.y) + (second.y - oldSecond.y)) / 2f
-                val distance = hypot((first.x - second.x).toDouble(), (first.y - second.y).toDouble()).toFloat()
-                val centerTravel = distanceBetween(center(), twoFingerStartCenter)
-                val separationTravel = abs(distance - twoFingerStartDistance)
-                val firstDx = first.x - oldFirst.x
-                val firstDy = first.y - oldFirst.y
-                val secondDx = second.x - oldSecond.x
-                val secondDy = second.y - oldSecond.y
-                val fingerMotionDot = firstDx * secondDx + firstDy * secondDy
-                if (twoFingerMode == TwoFingerMode.UNDECIDED) {
-                    twoFingerMode = when {
-                        // Fingers moving in opposite directions are a reliable pinch signal,
-                        // even if the centre drifts slightly on a real screen.
-                        fingerMotionDot < 0f && separationTravel >= PINCH_ACTIVATION_SLOP &&
-                            separationTravel > centerTravel * PINCH_CENTER_DRIFT_RATIO -> TwoFingerMode.PINCH
-                        centerTravel >= SCROLL_ACTIVATION_SLOP &&
-                            (fingerMotionDot >= 0f || centerTravel > separationTravel * SCROLL_SEPARATION_RATIO) -> TwoFingerMode.SCROLL
-                        else -> TwoFingerMode.UNDECIDED
-                    }
-                    // Do not turn the activation movement into several zoom shortcuts.
-                    // Starting from this frame gives a steady stream of small zoom steps.
-                    if (twoFingerMode == TwoFingerMode.PINCH) {
-                        twoFingerLastPinchDistance = distance
-                        moved = true
-                    }
-                }
-                when (twoFingerMode) {
-                    TwoFingerMode.SCROLL -> if (dx != 0f || dy != 0f) {
-                        moved = true
-                        sink.scroll(dx, dy)
-                    }
-                    TwoFingerMode.PINCH -> {
-                        val distanceChange = distance - twoFingerLastPinchDistance
-                        if (distanceChange != 0f) {
-                            moved = true
-                            sink.pinch(distanceChange / PINCH_DISTANCE_SCALE)
-                            twoFingerLastPinchDistance = distance
-                        }
-                    }
-                    TwoFingerMode.UNDECIDED -> Unit
-                }
+        when {
+            next.size == 1 && previous.size == 1 -> movePointer(next, previous)
+            next.size == 2 && previous.size == 2 -> moveTwoFingers(next, previous, time)
+            next.size == 1 && previous.size == 2 -> {
+                // A pointer-count transition has no meaningful one-finger delta.
+                start = next
+                state = GestureState.POINTER
             }
         }
     }
@@ -145,18 +112,23 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     fun up(id: Int, time: Long) {
         val released = points[id] ?: return
         val fingers = maxFingers
+        val endsActiveTwoFingerGesture = points.size == 2 &&
+            (state == GestureState.TWO_FINGER_SCROLL || state == GestureState.TWO_FINGER_PINCH)
         points = points - id
+        if (endsActiveTwoFingerGesture) {
+            sink.finishMotion()
+            twoFingerMotionFinished = true
+        }
         if (points.isNotEmpty()) {
             start = points
+            if (points.size == 1) state = GestureState.POINTER
             return
         }
-        sink.finishMotion()
+
+        if (!twoFingerMotionFinished) sink.finishMotion()
         if (dragging) {
             sink.mouseUp()
-            reset()
-            return
-        }
-        if (!moved && time - startedAt < config.tapTimeoutMs) {
+        } else if (!moved && time - startedAt < config.tapTimeoutMs) {
             when (fingers) {
                 1 -> {
                     sink.click()
@@ -175,34 +147,128 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         reset()
     }
 
+    private fun movePointer(next: Map<Int, TouchPoint>, previous: Map<Int, TouchPoint>) {
+        val point = next.values.first()
+        val old = previous[point.id] ?: return
+        val total = start[point.id]?.let { distance(point, it) } ?: 0f
+        if (total > config.tapSlop) moved = true
+        sink.move(point.x - old.x, point.y - old.y)
+    }
+
+    private fun moveTwoFingers(next: Map<Int, TouchPoint>, previous: Map<Int, TouchPoint>, time: Long) {
+        val ids = next.keys.sorted()
+        val first = next.getValue(ids[0])
+        val second = next.getValue(ids[1])
+        val oldFirst = previous[ids[0]] ?: return
+        val oldSecond = previous[ids[1]] ?: return
+        val centroid = center(first, second)
+        val dx = centroid.first - twoFingerLastCenter.first
+        val dy = centroid.second - twoFingerLastCenter.second
+        val distance = distance(first, second)
+        val separationDelta = distance - twoFingerLastDistance
+
+        // Kept separate from the centroid: one finger may be nearly stationary.
+        val firstDx = first.x - oldFirst.x
+        val firstDy = first.y - oldFirst.y
+        val secondDx = second.x - oldSecond.x
+        val secondDy = second.y - oldSecond.y
+        val fingerVelocityAgreement = firstDx * secondDx + firstDy * secondDy
+
+        pendingDx += dx
+        pendingDy += dy
+        translationEvidence += hypot(dx.toDouble(), dy.toDouble()).toFloat()
+        scaleEvidence += abs(separationDelta)
+        twoFingerLastCenter = centroid
+        twoFingerLastDistance = distance
+
+        if (state == GestureState.TWO_FINGER_TAP_CANDIDATE &&
+            (translationEvidence > config.tapSlop * .25f || scaleEvidence > config.tapSlop * .25f)
+        ) state = GestureState.TWO_FINGER_PENDING
+
+        val classifiedNow = if (state == GestureState.TWO_FINGER_PENDING || state == GestureState.TWO_FINGER_TAP_CANDIDATE) {
+            classifyTwoFingerGesture(fingerVelocityAgreement, distance)
+        } else false
+
+        when (state) {
+            GestureState.TWO_FINGER_SCROLL -> {
+                val bufferedDx = pendingDx
+                val bufferedDy = pendingDy
+                pendingDx = 0f
+                pendingDy = 0f
+                if (bufferedDx != 0f || bufferedDy != 0f) {
+                    moved = true
+                    sink.scroll(ScrollDelta(bufferedDx, bufferedDy, time))
+                }
+            }
+            GestureState.TWO_FINGER_PINCH -> if (!classifiedNow && separationDelta != 0f) {
+                moved = true
+                sink.pinch(separationDelta / PINCH_DISTANCE_SCALE)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun classifyTwoFingerGesture(fingerVelocityAgreement: Float, distance: Float): Boolean {
+        val translationScore = translationEvidence / config.scrollActivationSlop
+        val scaleScore = scaleEvidence / config.pinchActivationSlop
+        if (translationScore < 1f && scaleScore < 1f) return false
+
+        // Small speed differences create separation noise while scrolling. A
+        // one-finger-stationary pinch moves the centroid, so scaling gets a
+        // modest confidence advantage.
+        val pinchWins = scaleScore > translationScore * PINCH_CONFIDENCE_RATIO ||
+            (scaleScore >= 1f && fingerVelocityAgreement < 0f && scaleScore >= translationScore)
+        if (pinchWins) {
+            state = GestureState.TWO_FINGER_PINCH
+            pendingDx = 0f
+            pendingDy = 0f
+            val totalChange = distance - twoFingerStartDistance
+            val overshoot = (abs(totalChange) - config.pinchActivationSlop).coerceAtLeast(0f) * sign(totalChange)
+            if (overshoot != 0f) {
+                moved = true
+                sink.pinch(overshoot / PINCH_DISTANCE_SCALE)
+            }
+        } else if (translationScore >= 1f) {
+            state = GestureState.TWO_FINGER_SCROLL
+        }
+        return state == GestureState.TWO_FINGER_SCROLL || state == GestureState.TWO_FINGER_PINCH
+    }
+
+    private fun beginTwoFingerGesture() {
+        twoFingerStartDistance = distanceBetweenFirstTwo()
+        twoFingerLastDistance = twoFingerStartDistance
+        twoFingerLastCenter = center()
+        translationEvidence = 0f
+        scaleEvidence = 0f
+        pendingDx = 0f
+        pendingDy = 0f
+        state = GestureState.TWO_FINGER_TAP_CANDIDATE
+    }
+
     private fun reset() {
         points = emptyMap()
         start = emptyMap()
         maxFingers = 0
         moved = false
         dragging = false
-        doubleTapDragCandidate = false
-        twoFingerMode = TwoFingerMode.UNDECIDED
-        twoFingerStartDistance = 0f
-        twoFingerLastPinchDistance = 0f
+        translationEvidence = 0f
+        scaleEvidence = 0f
+        pendingDx = 0f
+        pendingDy = 0f
+        twoFingerMotionFinished = false
+        state = GestureState.IDLE
     }
 
     private fun distanceBetweenFirstTwo(): Float = points.values.take(2).let { values ->
-        if (values.size < 2) 0f else hypot((values[0].x - values[1].x).toDouble(), (values[0].y - values[1].y).toDouble()).toFloat()
+        if (values.size < 2) 0f else distance(values[0], values[1])
     }
 
-    private fun center(): Pair<Float, Float> = points.values.fold(0f to 0f) { sum, point ->
-        sum.first + point.x to sum.second + point.y
-    }.let { sum -> sum.first / points.size to sum.second / points.size }
-
-    private fun distanceBetween(first: Pair<Float, Float>, second: Pair<Float, Float>) =
-        hypot((first.first - second.first).toDouble(), (first.second - second.second).toDouble()).toFloat()
+    private fun center(): Pair<Float, Float> = points.values.take(2).let { center(it[0], it[1]) }
+    private fun center(first: TouchPoint, second: TouchPoint) = (first.x + second.x) / 2f to (first.y + second.y) / 2f
+    private fun distance(first: TouchPoint, second: TouchPoint) = hypot((first.x - second.x).toDouble(), (first.y - second.y).toDouble()).toFloat()
 
     private companion object {
-        const val SCROLL_ACTIVATION_SLOP = 14f
-        const val PINCH_ACTIVATION_SLOP = 16f
         const val PINCH_DISTANCE_SCALE = 100f
-        const val PINCH_CENTER_DRIFT_RATIO = .6f
-        const val SCROLL_SEPARATION_RATIO = 1.4f
+        const val PINCH_CONFIDENCE_RATIO = 1.08f
     }
 }

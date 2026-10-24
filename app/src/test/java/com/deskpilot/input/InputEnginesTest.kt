@@ -113,6 +113,61 @@ class InputEnginesTest {
         assertTrue(sink.pinches.isNotEmpty())
         assertTrue(sink.scrolls.isEmpty())
     }
+
+    @Test fun `slow two finger scrolling keeps fractional motion and never pinches`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 20f, 20f), 0)
+        engine.down(TouchPoint(2, 120f, 20f), 1)
+        for (step in 1..8) {
+            engine.move(listOf(TouchPoint(1, 20f, 20f + step * 2f), TouchPoint(2, 120f, 20f + step * 2.2f)), step * 16L)
+        }
+        assertTrue(sink.scrolls.isNotEmpty())
+        assertTrue(sink.scrolls.sumOf { it.second.toDouble() } > 0)
+        assertTrue(sink.pinches.isEmpty())
+    }
+
+    @Test fun `one stationary finger can still pinch`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 40f, 100f), 0)
+        engine.down(TouchPoint(2, 140f, 100f), 1)
+        engine.move(listOf(TouchPoint(1, 40f, 100f), TouchPoint(2, 165f, 100f)), 20)
+        engine.move(listOf(TouchPoint(1, 40f, 100f), TouchPoint(2, 185f, 100f)), 40)
+        assertTrue(sink.pinches.isNotEmpty())
+        assertTrue(sink.scrolls.isEmpty())
+    }
+
+    @Test fun `two finger tap stays a right click`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 10f, 10f), 0)
+        engine.down(TouchPoint(2, 70f, 10f), 5)
+        engine.move(listOf(TouchPoint(1, 11f, 10f), TouchPoint(2, 71f, 10f)), 20)
+        engine.up(1, 45)
+        engine.up(2, 50)
+        assertEquals(listOf(1 to MouseButton.RIGHT), sink.clicks)
+        assertTrue(sink.scrolls.isEmpty())
+        assertTrue(sink.pinches.isEmpty())
+    }
+
+    @Test fun `active two finger gesture finishes when either finger is lifted`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 20f, 20f), 0)
+        engine.down(TouchPoint(2, 120f, 20f), 1)
+        engine.move(listOf(TouchPoint(1, 20f, 50f), TouchPoint(2, 120f, 50f)), 20)
+        engine.up(2, 30)
+        assertEquals(1, sink.finishCalls)
+        engine.up(1, 35)
+        assertEquals(1, sink.finishCalls)
+    }
+
+    @Test fun `cancelled gesture does not produce a later click`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 20f, 20f), 0)
+        engine.down(TouchPoint(2, 120f, 20f), 1)
+        engine.move(listOf(TouchPoint(1, 20f, 50f), TouchPoint(2, 120f, 50f)), 20)
+        engine.cancel()
+        assertTrue(sink.clicks.isEmpty())
+        assertTrue(sink.cancelled)
+    }
 }
 
 private class RecordingSink : GestureSink {
@@ -124,14 +179,15 @@ private class RecordingSink : GestureSink {
     var finishCalls = 0
     var mouseDowns = 0
     var mouseUps = 0
+    var cancelled = false
 
     override fun move(dx: Float, dy: Float) { moves += dx to dy }
-    override fun scroll(dx: Float, dy: Float) { scrolls += dx to dy }
+    override fun scroll(delta: ScrollDelta) { scrolls += delta.dx to delta.dy }
     override fun finishMotion() { finishCalls++ }
     override fun mouseDown() { mouseDowns++ }
     override fun mouseUp() { mouseUps++ }
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) { clicks += count to button }
     override fun swipe(fingers: Int, dx: Float, dy: Float) { swipes += fingers to (dx to dy) }
     override fun pinch(scaleDelta: Float) { pinches += scaleDelta }
-    override fun cancel() = Unit
+    override fun cancel() { cancelled = true }
 }

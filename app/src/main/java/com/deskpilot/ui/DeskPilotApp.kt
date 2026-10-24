@@ -111,9 +111,23 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 @Composable private fun Touchpad(model: DeskPilotViewModel, modifier: Modifier, extremeDark: Boolean) {
     Surface(modifier = modifier.pointerInteropFilter { event ->
         fun point(index: Int) = TouchPoint(event.getPointerId(index), event.getX(index), event.getY(index))
+        fun historicalPoint(index: Int, historyIndex: Int) = TouchPoint(
+            event.getPointerId(index), event.getHistoricalX(index, historyIndex), event.getHistoricalY(index, historyIndex)
+        )
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> model.gestures.down(point(event.actionIndex), event.eventTime)
-            MotionEvent.ACTION_MOVE -> model.gestures.move(List(event.pointerCount, ::point), event.eventTime)
+            MotionEvent.ACTION_MOVE -> {
+                // Android may coalesce several physical samples into one event.
+                // Feed each in chronological order so gesture classification does
+                // not see one artificial, oversized scroll or pinch step.
+                for (historyIndex in 0 until event.historySize) {
+                    model.gestures.move(
+                        List(event.pointerCount) { historicalPoint(it, historyIndex) },
+                        event.getHistoricalEventTime(historyIndex)
+                    )
+                }
+                model.gestures.move(List(event.pointerCount, ::point), event.eventTime)
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> model.gestures.up(event.getPointerId(event.actionIndex), event.eventTime)
             MotionEvent.ACTION_CANCEL -> model.gestures.cancel()
         }
@@ -222,6 +236,11 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         ) { showAdvancedProfileWarning = true }
         if (settings.advancedLaptopGestures) {
             SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
+            SettingToggle("Figma precision pan", "Experimental: two-finger scroll holds Space and drags. Test it in a Figma canvas.", settings.figmaPrecisionPan, model::setFigmaPrecisionPan)
+            if (settings.figmaPrecisionPan) {
+                Text("Figma pan sensitivity ${(settings.figmaPanSensitivity * 100).toInt()}%")
+                Slider(settings.figmaPanSensitivity, model::setFigmaPanSensitivity, valueRange = .35f..2f)
+            }
         }
         Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
