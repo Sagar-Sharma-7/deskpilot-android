@@ -8,6 +8,7 @@ import android.view.WindowManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeOff
@@ -102,31 +103,42 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             view.performHapticFeedback(effect)
         }
     }
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.weight(1f)) {
-                Text("DeskPilot", fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
-                val caption = when (state) { is ConnectionState.Connected -> (state as ConnectionState.Connected).name; else -> "Not connected" }
-                Text(caption, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text("DeskPilot", fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+                    val caption = when (state) { is ConnectionState.Connected -> (state as ConnectionState.Connected).name; else -> "Not connected" }
+                    Text(caption, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                }
+                StatusDot(state, Modifier.clickable(onClick = openConnect))
+                TextButton(onClick = openSettings) { Text("Settings") }
             }
-            StatusDot(state, Modifier.clickable(onClick = openConnect))
-            TextButton(onClick = openSettings) { Text("Settings") }
+            Spacer(Modifier.height(12.dp))
+            if (settings.advancedLaptopGestures) {
+                MediaControls(model)
+                Spacer(Modifier.height(6.dp))
+            }
+            Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
+            Spacer(Modifier.height(8.dp))
+            MouseButtons(
+                model = model,
+                leftHanded = settings.leftHanded,
+                keyboardEnabled = settings.advancedLaptopGestures && state is ConnectionState.Connected,
+                openKeyboard = { showKeyboard = true }
+            )
         }
-        Spacer(Modifier.height(12.dp))
-        if (settings.advancedLaptopGestures) {
-            MediaControls(model)
-            Spacer(Modifier.height(6.dp))
+        if (showKeyboard) {
+            RemoteKeyboardPanel(
+                model = model,
+                dismiss = { showKeyboard = false },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .imePadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
         }
-        Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
-        Spacer(Modifier.height(8.dp))
-        MouseButtons(
-            model = model,
-            leftHanded = settings.leftHanded,
-            keyboardEnabled = settings.advancedLaptopGestures && state is ConnectionState.Connected,
-            openKeyboard = { showKeyboard = true }
-        )
     }
-    if (showKeyboard) RemoteKeyboardDialog(model) { showKeyboard = false }
 }
 
 @Composable private fun MediaControls(model: DeskPilotViewModel) {
@@ -271,7 +283,11 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     }
 }
 
-@Composable private fun RemoteKeyboardDialog(model: DeskPilotViewModel, dismiss: () -> Unit) {
+@Composable private fun RemoteKeyboardPanel(
+    model: DeskPilotViewModel,
+    dismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     var text by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -279,31 +295,36 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
         focusRequester.requestFocus()
         keyboard?.show()
     }
-    AlertDialog(
-        onDismissRequest = dismiss,
-        title = { Text("Type on Windows") },
-        text = {
-            Column {
-                Text("Use your phone keyboard. Typed basic Latin characters are sent to the focused Windows field.", fontSize = 13.sp)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { next ->
-                        model.typeFromPhone(text, next)
-                        text = next
-                    },
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
-                    label = { Text("Keyboard input") },
-                    minLines = 2,
-                    maxLines = 3,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
-                )
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { next ->
+                    model.typeFromPhone(text, next)
+                    text = next
+                },
+                modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                placeholder = { Text("Type to Windows") },
+                minLines = 1,
+                maxLines = 2,
+                // A multiline field with no IME action keeps the phone's Enter
+                // key available. Its newline is sent as a HID Enter report.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.None)
+            )
+            IconButton(onClick = { keyboard?.hide(); dismiss() }) {
+                Icon(Icons.Filled.Close, contentDescription = "Close keyboard input")
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { keyboard?.hide(); dismiss() }) { Text("Done") }
         }
-    )
+    }
 }
 
 @Composable private fun ConnectScreen(model: DeskPilotViewModel, back: () -> Unit, request: () -> Unit, makeDiscoverable: () -> Unit) {
