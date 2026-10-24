@@ -103,7 +103,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         Spacer(Modifier.height(12.dp))
         if (settings.advancedLaptopGestures) {
             MediaControls(model)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
         }
         Touchpad(model, Modifier.weight(1f).fillMaxWidth(), settings.extremeDark)
         Spacer(Modifier.height(8.dp))
@@ -113,16 +113,18 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 @Composable private fun MediaControls(model: DeskPilotViewModel) {
     var volumePosition by remember { mutableFloatStateOf(.5f) }
-    Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = { model.media(ConsumerControl.MUTE) }) { Text("Mute") }
-            TextButton(onClick = { model.media(ConsumerControl.PREVIOUS) }) { Text("‹") }
-            Button(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause") }
-            TextButton(onClick = { model.media(ConsumerControl.NEXT) }) { Text("›") }
-        }
-        Text("Fine volume adjustment · 50 detents · endpoints set min/max", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_DOWN) }) { Text("−") }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            TextButton(onClick = { model.media(ConsumerControl.MUTE) }) { Text("Mute", fontSize = 12.sp) }
+            TextButton(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause", fontSize = 12.sp) }
             Slider(
                 modifier = Modifier.weight(1f),
                 value = volumePosition,
@@ -147,7 +149,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                 valueRange = 0f..1f,
                 steps = VOLUME_SLIDER_INTERVALS - 1
             )
-            TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_UP) }) { Text("+") }
         }
     }
 }
@@ -269,54 +270,60 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     val hidDiagnostics by model.hidDiagnostics.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
         TextButton(onClick = back) { Text("← Trackpad") }; Text("Settings", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
-        SettingsHeader("Pointer")
-        Text("Pointer speed ${(settings.pointerSpeed * 100).toInt()}%")
-        Slider(settings.pointerSpeed, { model.setPointerSpeed(it) }, valueRange = .35f..2.4f)
-        SettingsHeader("Scrolling")
-        Text("Scroll speed ${(settings.scrollSpeed * 100).toInt()}%")
-        Slider(settings.scrollSpeed, { model.setScrollSpeed(it) }, valueRange = .02f.. .16f)
-        SettingToggle("Natural scrolling", "Move content with your fingers", settings.naturalScroll, model::setNaturalScroll)
-        SettingsHeader("Appearance")
-        SettingToggle("Dark theme", "", settings.darkTheme, model::setDark)
-        SettingToggle("Extreme dark mode", "Pure-black low-brightness trackpad; Settings stay readable", settings.extremeDark, model::setExtremeDark)
-        SettingToggle("Keep display awake", "Required while using the interactive trackpad", settings.keepAwake, model::setKeepAwake)
-        SettingToggle("Haptics", "Clicks, drags, and scrolling", settings.haptics, model::setHaptics)
-        SettingToggle("Scroll haptics", "A subtle tick while scrolling", settings.scrollHaptics, model::setScrollHaptics)
-        SettingsHeader("Advanced laptop gestures")
-        SettingToggle(
-            "Advanced laptop gestures",
-            "Enables horizontal scrolling, zoom, media controls, and configurable multi-finger gestures; changing it requires re-pairing Windows.",
-            settings.advancedLaptopGestures
-        ) { showAdvancedProfileWarning = true }
-        if (settings.advancedLaptopGestures) {
-            SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
-            Text(
-                "Choose an action for every three-, four-, and five-finger swipe or tap. " +
-                    "The starting values match Windows navigation; five-finger gestures start disabled.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            MultiFingerSection("Three fingers", MultiFingerSlot.entries.filter { it.name.startsWith("THREE_") }, settings.multiFingerBindings, model::setMultiFingerAction)
-            MultiFingerSection("Four fingers", MultiFingerSlot.entries.filter { it.name.startsWith("FOUR_") }, settings.multiFingerBindings, model::setMultiFingerAction)
-            MultiFingerSection("Five fingers", MultiFingerSlot.entries.filter { it.name.startsWith("FIVE_") }, settings.multiFingerBindings, model::setMultiFingerAction)
+        Spacer(Modifier.height(10.dp))
+        SettingsGroup("Trackpad", "Pointer and scrolling", initiallyExpanded = true) {
+            Text("Pointer speed ${(settings.pointerSpeed * 100).toInt()}%")
+            Slider(settings.pointerSpeed, { model.setPointerSpeed(it) }, valueRange = .35f..2.4f)
+            Text("Scroll speed ${(settings.scrollSpeed * 100).toInt()}%")
+            Slider(settings.scrollSpeed, { model.setScrollSpeed(it) }, valueRange = .02f.. .16f)
+            SettingToggle("Natural scrolling", "Move content with your fingers", settings.naturalScroll, model::setNaturalScroll)
         }
-        SettingsHeader("Developer")
-        SettingToggle("Input diagnostics", "Shows live gesture recognition and HID report information. Leave off for normal use.", settings.developerDiagnostics, model::setDeveloperDiagnostics)
-        if (settings.developerDiagnostics) {
-            Text(
-                "Gesture: ${gestureDiagnostics.state} · pointers ${gestureDiagnostics.pointerCount}" +
-                    "\ncentroid ${"%.1f".format(gestureDiagnostics.centroidDx)}, ${"%.1f".format(gestureDiagnostics.centroidDy)} · separation ${"%.1f".format(gestureDiagnostics.separationDelta)}" +
-                    "\nscroll ${"%.1f".format(gestureDiagnostics.scrollDx)}, ${"%.1f".format(gestureDiagnostics.scrollDy)} · pinch ${"%.3f".format(gestureDiagnostics.pinchDelta)}" +
-                    "\nrecognition ${gestureDiagnostics.recognitionLatencyMs ?: "—"} ms · cancellations ${gestureDiagnostics.cancellations}",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                "HID: ${hidDiagnostics.reportsPerSecond} reports/s · buttons ${hidDiagnostics.heldButtons}" +
-                    "\nqueued HID actions ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        SettingsGroup("Controls & gestures", "Pinch, media, and multi-finger controls", initiallyExpanded = true) {
+            SettingToggle(
+                "Advanced laptop gestures",
+                "Enables horizontal scrolling, zoom, media controls, and configurable multi-finger gestures; changing it requires re-pairing Windows.",
+                settings.advancedLaptopGestures
+            ) { showAdvancedProfileWarning = true }
+            if (settings.advancedLaptopGestures) {
+                SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
+                Text(
+                    "Choose an action for every three-, four-, and five-finger swipe or tap. " +
+                        "The starting values match Windows navigation; five-finger gestures start disabled.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                MultiFingerSection("Three fingers", MultiFingerSlot.entries.filter { it.name.startsWith("THREE_") }, settings.multiFingerBindings, model::setMultiFingerAction)
+                MultiFingerSection("Four fingers", MultiFingerSlot.entries.filter { it.name.startsWith("FOUR_") }, settings.multiFingerBindings, model::setMultiFingerAction)
+                MultiFingerSection("Five fingers", MultiFingerSlot.entries.filter { it.name.startsWith("FIVE_") }, settings.multiFingerBindings, model::setMultiFingerAction)
+            }
         }
-        Spacer(Modifier.height(10.dp)); Text("Samsung Side button", fontWeight = FontWeight.SemiBold); Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        SettingsGroup("Display & feedback", "Theme, battery, and haptics") {
+            SettingToggle("Dark theme", "", settings.darkTheme, model::setDark)
+            SettingToggle("Extreme dark mode", "Pure-black low-brightness trackpad; Settings stay readable", settings.extremeDark, model::setExtremeDark)
+            SettingToggle("Keep display awake", "Required while using the interactive trackpad", settings.keepAwake, model::setKeepAwake)
+            SettingToggle("Haptics", "Clicks, drags, scrolling, and volume", settings.haptics, model::setHaptics)
+            SettingToggle("Scroll haptics", "A subtle tick while scrolling", settings.scrollHaptics, model::setScrollHaptics)
+        }
+        SettingsGroup("Diagnostics & device", "Input troubleshooting and phone guidance") {
+            SettingToggle("Input diagnostics", "Shows live gesture recognition and HID report information. Leave off for normal use.", settings.developerDiagnostics, model::setDeveloperDiagnostics)
+            if (settings.developerDiagnostics) {
+                Text(
+                    "Gesture: ${gestureDiagnostics.state} · pointers ${gestureDiagnostics.pointerCount}" +
+                        "\ncentroid ${"%.1f".format(gestureDiagnostics.centroidDx)}, ${"%.1f".format(gestureDiagnostics.centroidDy)} · separation ${"%.1f".format(gestureDiagnostics.separationDelta)}" +
+                        "\nscroll ${"%.1f".format(gestureDiagnostics.scrollDx)}, ${"%.1f".format(gestureDiagnostics.scrollDy)} · pinch ${"%.3f".format(gestureDiagnostics.pinchDelta)}" +
+                        "\nrecognition ${gestureDiagnostics.recognitionLatencyMs ?: "—"} ms · cancellations ${gestureDiagnostics.cancellations}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "HID: ${hidDiagnostics.reportsPerSecond} reports/s · buttons ${hidDiagnostics.heldButtons}" +
+                        "\nqueued HID actions ${hidDiagnostics.queuedShortcuts} · failed reports ${hidDiagnostics.failedReports}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("Samsung Side button", fontWeight = FontWeight.SemiBold)
+            Text("DeskPilot cannot intercept the power key. You can set Double press → Open app → DeskPilot in Settings → Advanced features → Side button.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(14.dp))
     }
     if (showAdvancedProfileWarning) {
         val enabled = !settings.advancedLaptopGestures
@@ -334,7 +341,39 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     }
 }
 
-@Composable private fun SettingsHeader(text: String) { Spacer(Modifier.height(20.dp)); Text(text, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
+@Composable private fun SettingsGroup(
+    title: String,
+    subtitle: String,
+    initiallyExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f))
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.SemiBold)
+                    Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(if (expanded) "⌃" else "⌄", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (expanded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f))
+                Spacer(Modifier.height(5.dp))
+                content()
+            }
+        }
+    }
+}
+
 @Composable private fun SettingToggle(title: String, subtitle: String, checked: Boolean, change: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title); if (subtitle.isNotEmpty()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked, change) } }
 @Composable private fun MultiFingerSection(
     title: String,
@@ -342,9 +381,16 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     bindings: MultiFingerBindings,
     select: (MultiFingerSlot, MultiFingerAction) -> Unit
 ) {
+    var expanded by rememberSaveable(title) { mutableStateOf(title == "Three fingers") }
     Spacer(Modifier.height(12.dp))
-    Text(title, fontWeight = FontWeight.Medium)
-    slots.forEach { slot -> MultiFingerActionRow(slot, bindings[slot]) { select(slot, it) } }
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("$title gestures", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+        Text(if (expanded) "⌃" else "⌄", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (expanded) slots.forEach { slot -> MultiFingerActionRow(slot, bindings[slot]) { select(slot, it) } }
 }
 
 @Composable private fun MultiFingerActionRow(
