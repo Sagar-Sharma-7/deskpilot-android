@@ -88,7 +88,7 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         haptic(HapticCue.SHORTCUT)
     }
     fun adjustVolume(control: ConsumerControl) {
-        hid.consumer(control)
+        hid.volume(control)
         haptic(HapticCue.VOLUME_STEP)
     }
     fun isConnected() = connection.value is ConnectionState.Connected

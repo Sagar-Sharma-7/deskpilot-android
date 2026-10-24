@@ -73,8 +73,16 @@ class HidDeviceManager(private val context: Context) {
     private val pendingKeyStrokes = ArrayDeque<KeyStroke>()
     private var keyStrokeInFlight = false
     private var activeKeySource: KeySource? = null
-    private val pendingConsumerControls = ArrayDeque<Int>()
+    private data class ConsumerStroke(val bit: Int, val timing: ConsumerTiming)
+    private enum class ConsumerTiming(val holdMs: Long, val gapMs: Long) {
+        MEDIA(24L, 12L),
+        // Fifty Windows volume steps complete in about 0.9 seconds, so the
+        // system volume can visually keep up with a one-second slider sweep.
+        VOLUME(12L, 6L)
+    }
+    private val pendingConsumerControls = ArrayDeque<ConsumerStroke>()
     private var consumerInFlight = false
+    private var activeConsumerStroke: ConsumerStroke? = null
     private val connectionPrefs: SharedPreferences =
         context.getSharedPreferences("deskpilot_hid_connection", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Starting)
@@ -96,6 +104,7 @@ class HidDeviceManager(private val context: Context) {
     private val consumerReleaseRunnable = Runnable { releaseCurrentConsumerControl() }
     private val consumerNextRunnable = Runnable {
         consumerInFlight = false
+        activeConsumerStroke = null
         sendNextConsumerControl()
     }
     private val connectionTimeoutRunnable = Runnable { recoverStuckConnection() }
@@ -377,10 +386,18 @@ class HidDeviceManager(private val context: Context) {
         sendNextKeyStroke()
     }
 
-    /** Sends one standard Windows media/volume action through Consumer Control. */
+    /** Sends one standard Windows media action through Consumer Control. */
     fun consumer(control: ConsumerControl) {
         if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
-        pendingConsumerControls.addLast(control.bit)
+        pendingConsumerControls.addLast(ConsumerStroke(control.bit, ConsumerTiming.MEDIA))
+        sendNextConsumerControl()
+    }
+
+    /** Uses a safely faster press/release cadence for a continuous volume sweep. */
+    fun volume(control: ConsumerControl) {
+        require(control == ConsumerControl.VOLUME_UP || control == ConsumerControl.VOLUME_DOWN)
+        if (!advancedProfile || !channelOpen || protocol == BluetoothHidDevice.PROTOCOL_BOOT_MODE) return
+        pendingConsumerControls.addLast(ConsumerStroke(control.bit, ConsumerTiming.VOLUME))
         sendNextConsumerControl()
     }
 
@@ -474,9 +491,10 @@ class HidDeviceManager(private val context: Context) {
             return
         }
         consumerInFlight = true
-        val control = pendingConsumerControls.removeFirst()
-        sendNow(device, HidReportEncoder.CONSUMER_REPORT_ID, HidReportEncoder.consumer(control))
-        reportHandler.postDelayed(consumerReleaseRunnable, CONSUMER_HOLD_MS)
+        val stroke = pendingConsumerControls.removeFirst()
+        activeConsumerStroke = stroke
+        sendNow(device, HidReportEncoder.CONSUMER_REPORT_ID, HidReportEncoder.consumer(stroke.bit))
+        reportHandler.postDelayed(consumerReleaseRunnable, stroke.timing.holdMs)
     }
 
     private fun releaseCurrentConsumerControl() {
@@ -484,7 +502,7 @@ class HidDeviceManager(private val context: Context) {
         if (device != null && advancedProfile && channelOpen && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
             sendNow(device, HidReportEncoder.CONSUMER_REPORT_ID, HidReportEncoder.consumer(0))
         }
-        reportHandler.postDelayed(consumerNextRunnable, CONSUMER_GAP_MS)
+        reportHandler.postDelayed(consumerNextRunnable, activeConsumerStroke?.timing?.gapMs ?: CONSUMER_GAP_MS)
     }
 
     private fun clearPendingConsumerControls(releaseActiveControl: Boolean = false) {
@@ -493,6 +511,7 @@ class HidDeviceManager(private val context: Context) {
             channelOpen && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE
         pendingConsumerControls.clear()
         consumerInFlight = false
+        activeConsumerStroke = null
         reportHandler.removeCallbacks(consumerReleaseRunnable)
         reportHandler.removeCallbacks(consumerNextRunnable)
         if (shouldRelease && device != null) {
