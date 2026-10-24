@@ -195,6 +195,13 @@ class InputEnginesTest {
         assertEquals(listOf(3), sink.multiFingerTaps)
         assertTrue(sink.clicks.isEmpty())
     }
+
+    @Test fun `five finger tap is delivered for its configured action`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        (1..5).forEach { id -> engine.down(TouchPoint(id, id * 20f, 20f), id.toLong()) }
+        (1..5).forEach { id -> engine.up(id, 50L + id) }
+        assertEquals(listOf(5), sink.multiFingerTaps)
+    }
 }
 
 private class RecordingSink : GestureSink {

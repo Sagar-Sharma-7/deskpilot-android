@@ -27,7 +27,9 @@ import androidx.compose.ui.unit.sp
 import com.deskpilot.DeskPilotViewModel
 import com.deskpilot.actions.DeskAction
 import com.deskpilot.data.DeskSettings
-import com.deskpilot.data.MultiFingerPreset
+import com.deskpilot.data.MultiFingerAction
+import com.deskpilot.data.MultiFingerBindings
+import com.deskpilot.data.MultiFingerSlot
 import com.deskpilot.hid.ConsumerControl
 import com.deskpilot.hid.ConnectionState
 import com.deskpilot.hid.HidReportEncoder
@@ -83,6 +85,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                 DeskPilotViewModel.HapticCue.DRAG_START -> android.view.HapticFeedbackConstants.LONG_PRESS
                 DeskPilotViewModel.HapticCue.SHORTCUT -> android.view.HapticFeedbackConstants.KEYBOARD_TAP
                 DeskPilotViewModel.HapticCue.SCROLL -> android.view.HapticFeedbackConstants.CLOCK_TICK
+                DeskPilotViewModel.HapticCue.VOLUME_STEP -> android.view.HapticFeedbackConstants.CLOCK_TICK
             }
             view.performHapticFeedback(effect)
         }
@@ -117,19 +120,26 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             Button(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause") }
             TextButton(onClick = { model.media(ConsumerControl.NEXT) }) { Text("›") }
         }
-        Text("Relative volume", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Slider(
-            value = volumePosition,
-            onValueChange = { value ->
-                val change = value - volumePosition
-                if (kotlin.math.abs(change) >= .08f) {
-                    val control = if (change > 0f) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN
-                    repeat((kotlin.math.abs(change) / .08f).toInt().coerceIn(1, 3)) { model.media(control) }
-                    volumePosition = value
-                }
-            },
-            valueRange = 0f..1f
-        )
+        Text("Volume steps", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_DOWN) }) { Text("−") }
+            Slider(
+                modifier = Modifier.weight(1f),
+                value = volumePosition,
+                onValueChange = { value ->
+                    val change = value - volumePosition
+                    if (kotlin.math.abs(change) >= .10f) {
+                        val control = if (change > 0f) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN
+                        repeat((kotlin.math.abs(change) / .10f).toInt().coerceIn(1, 3)) { model.adjustVolume(control) }
+                        // Consumer Control exposes volume steps, not the PC's current
+                        // volume. This is an adjustment control, not a volume reading.
+                        volumePosition = value
+                    }
+                },
+                valueRange = 0f..1f
+            )
+            TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_UP) }) { Text("+") }
+        }
     }
 }
 
@@ -243,7 +253,6 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 @Composable private fun SettingsScreen(model: DeskPilotViewModel, settings: DeskSettings, back: () -> Unit) {
     var showAdvancedProfileWarning by rememberSaveable { mutableStateOf(false) }
-    var multiFingerMenuOpen by rememberSaveable { mutableStateOf(false) }
     val gestureDiagnostics by model.gestureDiagnostics.collectAsState()
     val hidDiagnostics by model.hidDiagnostics.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
@@ -265,28 +274,19 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
         SettingsHeader("Advanced laptop gestures")
         SettingToggle(
             "Advanced laptop gestures",
-            "Enables horizontal scrolling, zoom, media controls, and multi-finger presets; changing it requires re-pairing Windows.",
+            "Enables horizontal scrolling, zoom, media controls, and configurable multi-finger gestures; changing it requires re-pairing Windows.",
             settings.advancedLaptopGestures
         ) { showAdvancedProfileWarning = true }
         if (settings.advancedLaptopGestures) {
             SettingToggle("Pinch to zoom", "Pinch in/out sends Ctrl − / Ctrl + to Windows", settings.pinchToZoom, model::setPinchToZoom)
-            Text("Multi-finger preset", fontWeight = FontWeight.Medium)
-            Box {
-                OutlinedButton(onClick = { multiFingerMenuOpen = true }) { Text(settings.multiFingerPreset.label) }
-                DropdownMenu(expanded = multiFingerMenuOpen, onDismissRequest = { multiFingerMenuOpen = false }) {
-                    MultiFingerPreset.entries.forEach { preset ->
-                        DropdownMenuItem(
-                            text = { Text(preset.label) },
-                            onClick = { model.setMultiFingerPreset(preset); multiFingerMenuOpen = false }
-                        )
-                    }
-                }
-            }
             Text(
-                "Windows navigation: 3 fingers Task View/Desktop/apps; 4 fingers switch desktops. " +
-                    "Media controls: 3 fingers volume/tracks; 3-finger tap play/pause.",
+                "Choose an action for every three-, four-, and five-finger swipe or tap. " +
+                    "The starting values match Windows navigation; five-finger gestures start disabled.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            MultiFingerSection("Three fingers", MultiFingerSlot.entries.filter { it.name.startsWith("THREE_") }, settings.multiFingerBindings, model::setMultiFingerAction)
+            MultiFingerSection("Four fingers", MultiFingerSlot.entries.filter { it.name.startsWith("FOUR_") }, settings.multiFingerBindings, model::setMultiFingerAction)
+            MultiFingerSection("Five fingers", MultiFingerSlot.entries.filter { it.name.startsWith("FIVE_") }, settings.multiFingerBindings, model::setMultiFingerAction)
         }
         SettingsHeader("Developer")
         SettingToggle("Input diagnostics", "Shows live gesture recognition and HID report information. Leave off for normal use.", settings.developerDiagnostics, model::setDeveloperDiagnostics)
@@ -324,6 +324,35 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 @Composable private fun SettingsHeader(text: String) { Spacer(Modifier.height(20.dp)); Text(text, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) }
 @Composable private fun SettingToggle(title: String, subtitle: String, checked: Boolean, change: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title); if (subtitle.isNotEmpty()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked, change) } }
+@Composable private fun MultiFingerSection(
+    title: String,
+    slots: List<MultiFingerSlot>,
+    bindings: MultiFingerBindings,
+    select: (MultiFingerSlot, MultiFingerAction) -> Unit
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(title, fontWeight = FontWeight.Medium)
+    slots.forEach { slot -> MultiFingerActionRow(slot, bindings[slot]) { select(slot, it) } }
+}
+
+@Composable private fun MultiFingerActionRow(
+    slot: MultiFingerSlot,
+    action: MultiFingerAction,
+    select: (MultiFingerAction) -> Unit
+) {
+    var expanded by remember(slot) { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(slot.label, modifier = Modifier.weight(1f), fontSize = 14.sp)
+        Box {
+            OutlinedButton(onClick = { expanded = true }) { Text(action.label, fontSize = 12.sp) }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                MultiFingerAction.entries.forEach { candidate ->
+                    DropdownMenuItem(text = { Text(candidate.label) }, onClick = { select(candidate); expanded = false })
+                }
+            }
+        }
+    }
+}
 @Composable private fun ActionChooser(title: String, dismiss: () -> Unit, select: (DeskAction) -> Unit) { AlertDialog(onDismissRequest = dismiss, title = { Text("$title action") }, text = { Column { DeskAction.entries.filter { it != DeskAction.DRAG_LOCK && it != DeskAction.PRECISION }.forEach { action -> Text(action.label, modifier = Modifier.fillMaxWidth().clickable { select(action) }.padding(10.dp)) } } }, confirmButton = { TextButton(dismiss) { Text("Cancel") } }) }
 
 private fun extremeDarkColorScheme() = darkColorScheme(

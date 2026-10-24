@@ -183,7 +183,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
                     lastTap = released
                 }
                 2 -> sink.click(button = MouseButton.RIGHT)
-                3 -> sink.multiFingerTap(3)
+                in 3..5 -> sink.multiFingerTap(fingers)
             }
         }
         reset()

@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink {
-    enum class HapticCue { CLICK, DOUBLE_CLICK, DRAG_START, SHORTCUT, SCROLL }
+    enum class HapticCue { CLICK, DOUBLE_CLICK, DRAG_START, SHORTCUT, SCROLL, VOLUME_STEP }
     private val repository = SettingsRepository(app)
     private val hid = (app as DeskPilotApplication).hidDeviceManager
     val connection: StateFlow<ConnectionState> = hid.state
@@ -65,7 +65,8 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         viewModelScope.launch { repository.setAdvancedLaptopGestures(enabled) }
     }
     fun setPinchToZoom(enabled: Boolean) = viewModelScope.launch { repository.setPinchToZoom(enabled) }
-    fun setMultiFingerPreset(value: MultiFingerPreset) = viewModelScope.launch { repository.setMultiFingerPreset(value) }
+    fun setMultiFingerAction(slot: MultiFingerSlot, value: MultiFingerAction) =
+        viewModelScope.launch { repository.setMultiFingerAction(slot, value) }
     fun setDeveloperDiagnostics(enabled: Boolean) = viewModelScope.launch { repository.setDeveloperDiagnostics(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { repository.setKeepAwake(enabled) }
     fun setMouseButton(button: Int, down: Boolean) {
@@ -75,6 +76,10 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     fun media(control: ConsumerControl) {
         hid.consumer(control)
         haptic(HapticCue.SHORTCUT)
+    }
+    fun adjustVolume(control: ConsumerControl) {
+        hid.consumer(control)
+        haptic(HapticCue.VOLUME_STEP)
     }
     fun isConnected() = connection.value is ConnectionState.Connected
     fun handleVolumeKey(event: KeyEvent): Boolean {
@@ -114,34 +119,23 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     override fun swipe(fingers: Int, dx: Float, dy: Float) {
         if (!settings.value.advancedLaptopGestures) return
         val horizontal = kotlin.math.abs(dx) > kotlin.math.abs(dy)
-        when (fingers) {
-            3 -> when (settings.value.multiFingerPreset) {
-                MultiFingerPreset.MEDIA_CONTROLS -> when {
-                    horizontal && dx < 0 -> media(ConsumerControl.PREVIOUS)
-                    horizontal -> media(ConsumerControl.NEXT)
-                    dy < 0 -> media(ConsumerControl.VOLUME_UP)
-                    else -> media(ConsumerControl.VOLUME_DOWN)
-                }
-                MultiFingerPreset.WINDOWS_NAVIGATION -> when {
-                    horizontal && dx < 0 -> execute(DeskAction.SWITCH_APPS_BACK)
-                    horizontal -> execute(DeskAction.SWITCH_APPS)
-                    dy < 0 -> execute(DeskAction.TASK_VIEW)
-                    else -> execute(DeskAction.SHOW_DESKTOP)
-                }
-                MultiFingerPreset.OFF -> Unit
-            }
-            4 -> if (settings.value.multiFingerPreset != MultiFingerPreset.OFF && horizontal) {
-                execute(if (dx < 0) DeskAction.DESKTOP_LEFT else DeskAction.DESKTOP_RIGHT)
-            }
+        val slot = when (fingers) {
+            3 -> if (horizontal) if (dx < 0) MultiFingerSlot.THREE_LEFT else MultiFingerSlot.THREE_RIGHT else if (dy < 0) MultiFingerSlot.THREE_UP else MultiFingerSlot.THREE_DOWN
+            4 -> if (horizontal) if (dx < 0) MultiFingerSlot.FOUR_LEFT else MultiFingerSlot.FOUR_RIGHT else if (dy < 0) MultiFingerSlot.FOUR_UP else MultiFingerSlot.FOUR_DOWN
+            5 -> if (horizontal) if (dx < 0) MultiFingerSlot.FIVE_LEFT else MultiFingerSlot.FIVE_RIGHT else if (dy < 0) MultiFingerSlot.FIVE_UP else MultiFingerSlot.FIVE_DOWN
+            else -> return
         }
+        performMultiFingerAction(settings.value.multiFingerBindings[slot])
     }
     override fun multiFingerTap(fingers: Int) {
-        if (!settings.value.advancedLaptopGestures || fingers != 3) return
-        when (settings.value.multiFingerPreset) {
-            MultiFingerPreset.MEDIA_CONTROLS -> media(ConsumerControl.PLAY_PAUSE)
-            MultiFingerPreset.WINDOWS_NAVIGATION -> execute(DeskAction.SEARCH)
-            MultiFingerPreset.OFF -> Unit
+        if (!settings.value.advancedLaptopGestures) return
+        val slot = when (fingers) {
+            3 -> MultiFingerSlot.THREE_TAP
+            4 -> MultiFingerSlot.FOUR_TAP
+            5 -> MultiFingerSlot.FIVE_TAP
+            else -> return
         }
+        performMultiFingerAction(settings.value.multiFingerBindings[slot])
     }
     override fun pinch(scaleDelta: Float) {
         if (!settings.value.advancedLaptopGestures || !settings.value.pinchToZoom) return
@@ -156,6 +150,22 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         }
     }
     override fun cancel() = releaseInputs()
+    private fun performMultiFingerAction(action: MultiFingerAction) = when (action) {
+        MultiFingerAction.NONE -> Unit
+        MultiFingerAction.TASK_VIEW -> execute(DeskAction.TASK_VIEW)
+        MultiFingerAction.SHOW_DESKTOP -> execute(DeskAction.SHOW_DESKTOP)
+        MultiFingerAction.SWITCH_APP_PREVIOUS -> execute(DeskAction.SWITCH_APPS_BACK)
+        MultiFingerAction.SWITCH_APP_NEXT -> execute(DeskAction.SWITCH_APPS)
+        MultiFingerAction.DESKTOP_LEFT -> execute(DeskAction.DESKTOP_LEFT)
+        MultiFingerAction.DESKTOP_RIGHT -> execute(DeskAction.DESKTOP_RIGHT)
+        MultiFingerAction.SEARCH -> execute(DeskAction.SEARCH)
+        MultiFingerAction.VOLUME_UP -> adjustVolume(ConsumerControl.VOLUME_UP)
+        MultiFingerAction.VOLUME_DOWN -> adjustVolume(ConsumerControl.VOLUME_DOWN)
+        MultiFingerAction.MUTE -> media(ConsumerControl.MUTE)
+        MultiFingerAction.TRACK_PREVIOUS -> media(ConsumerControl.PREVIOUS)
+        MultiFingerAction.TRACK_NEXT -> media(ConsumerControl.NEXT)
+        MultiFingerAction.PLAY_PAUSE -> media(ConsumerControl.PLAY_PAUSE)
+    }
     private fun haptic(cue: HapticCue) { if (settings.value.haptics) _hapticEvents.tryEmit(cue) }
 
     private companion object {

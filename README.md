@@ -28,8 +28,8 @@ DeskPilot can also initiate a connection to the paired Windows HID host. Keep it
 - Two-finger tap is right click.
 - A second tap followed by movement starts a drag. The on-screen buttons also support press-and-hold drag.
 - Two fingers scroll vertically and horizontally. Pinch sends Ctrl + / Ctrl -.
-- Advanced profile: choose **Windows navigation** (three fingers: Task View/Desktop/app switching; four fingers: switch desktops) or **Media controls** (three fingers: volume and track navigation; three-finger tap: play/pause). Five-finger input intentionally has no default action.
-- The compact media strip offers mute, previous, play/pause, next, and a relative volume control above the trackpad.
+- Advanced profile: configure every three-, four-, and five-finger swipe or tap independently. The defaults follow Windows navigation (Task View/Desktop/app switching and desktop switching); five-finger gestures begin with no action.
+- The compact media strip offers mute, previous, play/pause, next, and a haptic volume-step control above the trackpad. Standard Bluetooth media reports can change volume but cannot read or set the PC's absolute volume.
 - The action bar sends shortcuts to the focused Windows application. Copy and Paste are Windows Ctrl+C/Ctrl+V, not Android clipboard operations.
 - Volume shortcuts are opt-in, run only while DeskPilot is foreground and connected, and ignore Android key repeats. Disabling them restores normal volume behavior.
 
@@ -47,10 +47,10 @@ Android does not expose the protected power button to normal apps. DeskPilot inc
 
 1. Pair successfully and confirm the connection indicator names the Galaxy Book.
 2. Verify stationary finger causes no cursor movement; try slow and fast movements and pointer speed tuning.
-3. Verify tap, double tap, two-finger right click, three-finger middle click, and drag after app background/foreground transitions.
+3. Verify tap, double tap, two-finger right click, three-/four-/five-finger taps, and drag after app background/foreground transitions.
 4. Verify vertical/horizontal scroll in a browser and File Explorer; test natural-scroll setting.
 5. Confirm Copy/Paste and action-bar shortcuts affect Windows, not the phone.
 6. Enable volume shortcuts, test Copy/Paste once per press, then disable them and verify phone volume works normally.
 7. During a drag, turn Bluetooth off or background the app, reconnect, and confirm no mouse or modifier is stuck.
 8. With Advanced laptop gestures enabled, test slow and fast two-finger vertical, horizontal, and diagonal movement in Chrome, Windows Settings, and File Explorer. Confirm a pinch never scrolls and a scroll never zooms.
-9. After re-pairing the advanced profile, test each media-strip button. Select both multi-finger presets and verify one three-finger swipe results in exactly one intended action; verify four-finger left/right switches desktops and five-finger input does nothing.
+9. After re-pairing the advanced profile, test each media-strip button and its haptic volume steps. Choose a few custom multi-finger assignments and verify one swipe or tap results in exactly one selected action.
