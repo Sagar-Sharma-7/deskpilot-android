@@ -179,9 +179,21 @@ class InputEnginesTest {
         engine.down(TouchPoint(2, 70f, 20f), 1)
         engine.down(TouchPoint(3, 120f, 20f), 2)
         engine.move(listOf(TouchPoint(1, 20f, 55f), TouchPoint(2, 70f, 55f), TouchPoint(3, 120f, 55f)), 30)
-        engine.move(listOf(TouchPoint(1, 20f, 95f), TouchPoint(2, 70f, 95f), TouchPoint(3, 120f, 95f)), 45)
         assertEquals(1, sink.swipes.size)
         assertEquals(3, sink.swipes.single().first)
+        assertTrue(!sink.swipes.single().second)
+    }
+
+    @Test fun `multi finger swipe continues with delta samples after activation`() {
+        val sink = RecordingSink(); val engine = GestureEngine(sink)
+        engine.down(TouchPoint(1, 20f, 20f), 0)
+        engine.down(TouchPoint(2, 70f, 20f), 1)
+        engine.down(TouchPoint(3, 120f, 20f), 2)
+        engine.move(listOf(TouchPoint(1, 20f, 40f), TouchPoint(2, 70f, 40f), TouchPoint(3, 120f, 40f)), 20)
+        engine.move(listOf(TouchPoint(1, 20f, 50f), TouchPoint(2, 70f, 50f), TouchPoint(3, 120f, 50f)), 35)
+        assertEquals(2, sink.swipes.size)
+        assertTrue(sink.swipes[1].second)
+        assertEquals(10f, sink.swipes[1].third.second)
     }
 
     @Test fun `three finger tap is distinct from a two finger right click`() {
@@ -209,7 +221,7 @@ private class RecordingSink : GestureSink {
     val scrolls = mutableListOf<Pair<Float, Float>>()
     val pinches = mutableListOf<Float>()
     val clicks = mutableListOf<Pair<Int, MouseButton>>()
-    val swipes = mutableListOf<Pair<Int, Pair<Float, Float>>>()
+    val swipes = mutableListOf<Triple<Int, Boolean, Pair<Float, Float>>>()
     val multiFingerTaps = mutableListOf<Int>()
     var finishCalls = 0
     var mouseDowns = 0
@@ -222,7 +234,7 @@ private class RecordingSink : GestureSink {
     override fun mouseDown() { mouseDowns++ }
     override fun mouseUp() { mouseUps++ }
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) { clicks += count to button }
-    override fun swipe(fingers: Int, dx: Float, dy: Float) { swipes += fingers to (dx to dy) }
+    override fun swipe(fingers: Int, dx: Float, dy: Float, isContinuation: Boolean) { swipes += Triple(fingers, isContinuation, dx to dy) }
     override fun multiFingerTap(fingers: Int) { multiFingerTaps += fingers }
     override fun pinch(scaleDelta: Float) { pinches += scaleDelta }
     override fun cancel() { cancelled = true }

@@ -32,7 +32,8 @@ interface GestureSink {
     fun mouseDown()
     fun mouseUp()
     fun click(count: Int = 1, button: MouseButton = MouseButton.LEFT, isDoubleTap: Boolean = false)
-    fun swipe(fingers: Int, dx: Float, dy: Float)
+    /** First sample crosses the gesture threshold; later samples are movement deltas. */
+    fun swipe(fingers: Int, dx: Float, dy: Float, isContinuation: Boolean)
     fun multiFingerTap(fingers: Int)
     fun pinch(scaleDelta: Float)
     fun cancel()
@@ -100,6 +101,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
     private var lastPinchDelta = 0f
     private var cancellationCount = 0
     private var multiFingerStartCenter = 0f to 0f
+    private var multiFingerLastCenter = 0f to 0f
     private var multiFingerDispatched = false
 
     fun setDiagnosticsEnabled(enabled: Boolean) {
@@ -268,17 +270,31 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
         }
     }
 
-    /** Multi-finger input is one deliberate directional action, never a continuous scroll. */
+    /**
+     * Navigation/media assignments use the first directional sample only. Volume
+     * assignments can also consume the subsequent deltas, giving them the same
+     * continuous feel as a laptop trackpad without repeating task/app actions.
+     */
     private fun moveMultiFinger(next: Map<Int, TouchPoint>) {
-        if (multiFingerDispatched) return
         val centroid = centerOf(next.values)
         val dx = centroid.first - multiFingerStartCenter.first
         val dy = centroid.second - multiFingerStartCenter.second
-        if (max(abs(dx), abs(dy)) < config.multiFingerSwipeSlop) return
-        multiFingerDispatched = true
-        moved = true
-        state = GestureState.MULTI_FINGER_ACTIVE
-        sink.swipe(next.size.coerceAtMost(5), dx, dy)
+        if (!multiFingerDispatched) {
+            if (max(abs(dx), abs(dy)) < config.multiFingerSwipeSlop) return
+            multiFingerDispatched = true
+            multiFingerLastCenter = centroid
+            moved = true
+            state = GestureState.MULTI_FINGER_ACTIVE
+            sink.swipe(next.size.coerceAtMost(5), dx, dy, isContinuation = false)
+            return
+        }
+
+        val deltaX = centroid.first - multiFingerLastCenter.first
+        val deltaY = centroid.second - multiFingerLastCenter.second
+        multiFingerLastCenter = centroid
+        if (deltaX != 0f || deltaY != 0f) {
+            sink.swipe(next.size.coerceAtMost(5), deltaX, deltaY, isContinuation = true)
+        }
     }
 
     private fun classifyTwoFingerGesture(fingerVelocityAgreement: Float, distance: Float, time: Long): Boolean {
@@ -323,6 +339,7 @@ class GestureEngine(private val sink: GestureSink, private val config: Config = 
 
     private fun beginMultiFingerGesture() {
         multiFingerStartCenter = centerOf(points.values)
+        multiFingerLastCenter = multiFingerStartCenter
         multiFingerDispatched = false
         state = GestureState.MULTI_FINGER_PENDING
     }

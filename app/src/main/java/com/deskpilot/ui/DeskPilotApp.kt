@@ -120,28 +120,33 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             Button(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause") }
             TextButton(onClick = { model.media(ConsumerControl.NEXT) }) { Text("›") }
         }
-        Text("Volume steps", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Fine volume adjustment · 50 detents", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_DOWN) }) { Text("−") }
             Slider(
                 modifier = Modifier.weight(1f),
                 value = volumePosition,
                 onValueChange = { value ->
-                    val change = value - volumePosition
-                    if (kotlin.math.abs(change) >= .10f) {
-                        val control = if (change > 0f) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN
-                        repeat((kotlin.math.abs(change) / .10f).toInt().coerceIn(1, 3)) { model.adjustVolume(control) }
-                        // Consumer Control exposes volume steps, not the PC's current
-                        // volume. This is an adjustment control, not a volume reading.
-                        volumePosition = value
+                    val oldStep = (volumePosition * VOLUME_SLIDER_INTERVALS).toInt()
+                    val newStep = (value * VOLUME_SLIDER_INTERVALS).toInt()
+                    val stepChange = newStep - oldStep
+                    if (stepChange != 0) {
+                        val control = if (stepChange > 0) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN
+                        repeat(kotlin.math.abs(stepChange)) { model.adjustVolume(control) }
                     }
+                    // This reports 50 fine adjustment detents, not the laptop's
+                    // unknown current volume. Standard HID does not provide that.
+                    volumePosition = value
                 },
-                valueRange = 0f..1f
+                valueRange = 0f..1f,
+                steps = VOLUME_SLIDER_INTERVALS - 1
             )
             TextButton(onClick = { model.adjustVolume(ConsumerControl.VOLUME_UP) }) { Text("+") }
         }
     }
 }
+
+private const val VOLUME_SLIDER_INTERVALS = 50
 
 @Composable private fun StatusDot(state: ConnectionState, modifier: Modifier = Modifier) {
     val color = when (state) { is ConnectionState.Connected -> Color(0xFF22A06B); is ConnectionState.Error, ConnectionState.PermissionRequired, ConnectionState.Unsupported -> MaterialTheme.colorScheme.error; else -> Color(0xFFE2A817) }

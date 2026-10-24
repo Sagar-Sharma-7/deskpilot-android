@@ -28,6 +28,9 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
     val hapticEvents = _hapticEvents.asSharedFlow()
     private var lastScrollHapticAt = 0L
     private var pinchAccumulator = 0f
+    private var multiFingerVolumeDistance = 0f
+    private var activeMultiFingerSlot: MultiFingerSlot? = null
+    private val multiFingerVolumeStepDistance = app.resources.displayMetrics.density * 12f
     private val actions = ActionRegistry(hid, ::togglePrecision, ::toggleDragLock)
     val gestures = GestureEngine(this, GestureEngine.Config(density = app.resources.displayMetrics.density))
     val gestureDiagnostics: StateFlow<GestureDiagnostics> = gestures.diagnostics
@@ -43,7 +46,14 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         hid.start(allowed)
     }
     fun close() { hid.stop(); HidForegroundService.stop(getApplication()) }
-    fun releaseInputs() { _dragLocked.value = false; hid.releaseAll(); pointer.reset(); scroll.reset() }
+    fun releaseInputs() {
+        _dragLocked.value = false
+        multiFingerVolumeDistance = 0f
+        activeMultiFingerSlot = null
+        hid.releaseAll()
+        pointer.reset()
+        scroll.reset()
+    }
     fun execute(action: DeskAction) {
         actions.execute(action)
         if (action != DeskAction.NO_ACTION) haptic(HapticCue.SHORTCUT)
@@ -108,7 +118,12 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
             _hapticEvents.tryEmit(HapticCue.SCROLL)
         }
     }
-    override fun finishMotion() { pinchAccumulator = 0f; hid.discardPendingMotion() }
+    override fun finishMotion() {
+        pinchAccumulator = 0f
+        multiFingerVolumeDistance = 0f
+        activeMultiFingerSlot = null
+        hid.discardPendingMotion()
+    }
     override fun mouseDown() { hid.setButton(HidReportEncoder.LEFT, true); haptic(HapticCue.DRAG_START) }
     override fun mouseUp() = hid.setButton(HidReportEncoder.LEFT, false)
     override fun click(count: Int, button: MouseButton, isDoubleTap: Boolean) {
@@ -116,16 +131,32 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
         repeat(count) { hid.click(hidButton) }
         haptic(if (isDoubleTap) HapticCue.DOUBLE_CLICK else HapticCue.CLICK)
     }
-    override fun swipe(fingers: Int, dx: Float, dy: Float) {
+    override fun swipe(fingers: Int, dx: Float, dy: Float, isContinuation: Boolean) {
         if (!settings.value.advancedLaptopGestures) return
         val horizontal = kotlin.math.abs(dx) > kotlin.math.abs(dy)
-        val slot = when (fingers) {
+        val detectedSlot = when (fingers) {
             3 -> if (horizontal) if (dx < 0) MultiFingerSlot.THREE_LEFT else MultiFingerSlot.THREE_RIGHT else if (dy < 0) MultiFingerSlot.THREE_UP else MultiFingerSlot.THREE_DOWN
             4 -> if (horizontal) if (dx < 0) MultiFingerSlot.FOUR_LEFT else MultiFingerSlot.FOUR_RIGHT else if (dy < 0) MultiFingerSlot.FOUR_UP else MultiFingerSlot.FOUR_DOWN
             5 -> if (horizontal) if (dx < 0) MultiFingerSlot.FIVE_LEFT else MultiFingerSlot.FIVE_RIGHT else if (dy < 0) MultiFingerSlot.FIVE_UP else MultiFingerSlot.FIVE_DOWN
             else -> return
         }
-        performMultiFingerAction(settings.value.multiFingerBindings[slot])
+        // Lock the direction after activation. Tiny sideways jitter must not
+        // turn a continuous vertical volume gesture into a different binding.
+        val slot = if (isContinuation) activeMultiFingerSlot ?: detectedSlot else detectedSlot.also { activeMultiFingerSlot = it }
+        val action = settings.value.multiFingerBindings[slot]
+        if (action == MultiFingerAction.VOLUME_UP || action == MultiFingerAction.VOLUME_DOWN) {
+            if (!isContinuation) multiFingerVolumeDistance = 0f
+            multiFingerVolumeDistance += if (horizontal) kotlin.math.abs(dx) else kotlin.math.abs(dy)
+            val steps = (multiFingerVolumeDistance / multiFingerVolumeStepDistance).toInt()
+            if (steps > 0) {
+                repeat(steps) {
+                    adjustVolume(if (action == MultiFingerAction.VOLUME_UP) ConsumerControl.VOLUME_UP else ConsumerControl.VOLUME_DOWN)
+                }
+                multiFingerVolumeDistance -= steps * multiFingerVolumeStepDistance
+            }
+        } else if (!isContinuation) {
+            performMultiFingerAction(action)
+        }
     }
     override fun multiFingerTap(fingers: Int) {
         if (!settings.value.advancedLaptopGestures) return
