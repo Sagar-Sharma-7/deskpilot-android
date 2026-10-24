@@ -191,6 +191,9 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 
 private const val VOLUME_SLIDER_INTERVALS = 50
 private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
+// Keeps the IME editable when there is no local text. This character is not
+// visible, never reaches Windows, and lets a Backspace be observed as an edit.
+private const val REMOTE_INPUT_ANCHOR = '\u2060'
 
 @Composable private fun StatusDot(state: ConnectionState, modifier: Modifier = Modifier) {
     val color = when (state) { is ConnectionState.Connected -> Color(0xFF22A06B); is ConnectionState.Error, ConnectionState.PermissionRequired, ConnectionState.Unsupported -> MaterialTheme.colorScheme.error; else -> Color(0xFFE2A817) }
@@ -288,7 +291,7 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
     dismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(REMOTE_INPUT_ANCHOR.toString()) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
@@ -309,11 +312,30 @@ private const val VOLUME_ENDPOINT_CLAMP_STEPS = 25
             OutlinedTextField(
                 value = text,
                 onValueChange = { next ->
-                    model.typeFromPhone(text, next)
-                    text = next
+                    if (next.isEmpty()) {
+                        // The user pressed Backspace while the phone's input
+                        // contained only its invisible anchor. The focused
+                        // Windows control can still have existing text, so
+                        // forward that deletion and restore the anchor.
+                        if (text == REMOTE_INPUT_ANCHOR.toString()) {
+                            model.backspaceFromPhone()
+                        } else {
+                            // A selection can clear typed local text in one
+                            // edit. Remove that text remotely but retain the
+                            // local anchor for the next Backspace.
+                            model.typeFromPhone(text, REMOTE_INPUT_ANCHOR.toString())
+                        }
+                        text = REMOTE_INPUT_ANCHOR.toString()
+                    } else {
+                        // IMEs should preserve the anchor, but normalizing
+                        // also handles an IME that strips formatting marks.
+                        val normalized = if (next.first() == REMOTE_INPUT_ANCHOR) next else "$REMOTE_INPUT_ANCHOR$next"
+                        model.typeFromPhone(text, normalized)
+                        text = normalized
+                    }
                 },
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                placeholder = { Text("Type to Windows") },
+                label = { Text("Type to Windows") },
                 minLines = 1,
                 maxLines = 2,
                 // A multiline field with no IME action keeps the phone's Enter

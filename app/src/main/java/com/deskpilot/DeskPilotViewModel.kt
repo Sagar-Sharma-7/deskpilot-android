@@ -111,6 +111,12 @@ class DeskPilotViewModel(app: Application) : AndroidViewModel(app), GestureSink 
             HidReportEncoder.keyboardUsage(character)?.let { usage -> hid.key(usage.modifiers, usage.key) }
         }
     }
+    /** Sends deletion even when the phone's local input field is already empty. */
+    fun backspaceFromPhone() {
+        if (settings.value.advancedLaptopGestures && isConnected()) {
+            hid.key(0, HidReportEncoder.HID_BACKSPACE)
+        }
+    }
     fun isConnected() = connection.value is ConnectionState.Connected
     fun handleVolumeKey(event: KeyEvent): Boolean {
         val s = settings.value
