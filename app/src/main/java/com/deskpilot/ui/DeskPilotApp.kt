@@ -8,6 +8,8 @@ import android.view.WindowManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -117,9 +119,7 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
 @Composable private fun MediaControls(model: DeskPilotViewModel) {
     var volumePosition by remember { mutableFloatStateOf(.5f) }
     Surface(
-        // Keep the slider well inside Android's left/right system-back zones.
-        // The app must not exclude those gestures: Back should still work.
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
@@ -128,8 +128,9 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            TextButton(onClick = { model.media(ConsumerControl.MUTE) }) { Text("Mute", fontSize = 12.sp) }
-            TextButton(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) { Text("Play / Pause", fontSize = 12.sp) }
+            IconButton(onClick = { model.media(ConsumerControl.MUTE) }) {
+                Icon(Icons.Filled.VolumeOff, contentDescription = "Mute")
+            }
             Slider(
                 modifier = Modifier.weight(1f),
                 value = volumePosition,
@@ -154,6 +155,11 @@ fun DeskPilotApp(model: DeskPilotViewModel, settings: DeskSettings, onRequestBlu
                 valueRange = 0f..1f,
                 steps = VOLUME_SLIDER_INTERVALS - 1
             )
+            // This is a standard media-toggle report; the Play icon stays
+            // understandable whether Windows is currently playing or paused.
+            IconButton(onClick = { model.media(ConsumerControl.PLAY_PAUSE) }) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "Play or pause")
+            }
         }
     }
 }
