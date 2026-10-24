@@ -47,6 +47,8 @@ class HidDeviceManager(private val context: Context) {
     private var advancedProfile = false
     private var profileRefreshPending = false
     private var profileRefreshScheduled = false
+    private var connectingDevice: BluetoothDevice? = null
+    private var recoveryAttempted = false
     private val reportHandler = Handler(Looper.getMainLooper())
     private val pendingClickReleases = mutableMapOf<Int, Runnable>()
     private val pendingKeyStrokes = ArrayDeque<ByteArray>()
@@ -61,6 +63,8 @@ class HidDeviceManager(private val context: Context) {
         keyStrokeInFlight = false
         sendNextKeyStroke()
     }
+    private val connectionTimeoutRunnable = Runnable { recoverStuckConnection() }
+    private val reconnectFallbackRunnable = Runnable { retryConnectionAfterClose() }
 
     init {
         advancedProfile = connectionPrefs.getBoolean(ADVANCED_PROFILE, false)
@@ -72,6 +76,7 @@ class HidDeviceManager(private val context: Context) {
             if (!registered) {
                 channelOpen = false
                 host = null
+                clearConnectionAttempt()
                 if (profileRefreshPending) {
                     scheduleProfileRegistration()
                     return
@@ -83,14 +88,23 @@ class HidDeviceManager(private val context: Context) {
             if (pluggedDevice == null) {
                 host = null
                 channelOpen = false
-                _state.value = ConnectionState.Ready
+                val next = reconnectAfterClose
+                if (next != null) {
+                    // Closing a stale cable reports an unplug before (or instead
+                    // of) the normal disconnected callback on some phones.
+                    markConnecting(next)
+                    scheduleReconnectFallback(next)
+                } else {
+                    clearConnectionAttempt()
+                    _state.value = ConnectionState.Ready
+                }
             } else {
                 // This is not proof that the interrupt/input channel is ready.
                 if (channelOpen && host?.address == pluggedDevice.address) return
                 host = pluggedDevice
                 channelOpen = false
                 rememberHost(pluggedDevice)
-                _state.value = ConnectionState.Connecting(pluggedDevice.name ?: pluggedDevice.address)
+                markConnecting(pluggedDevice)
             }
         }
 
@@ -99,7 +113,7 @@ class HidDeviceManager(private val context: Context) {
                 BluetoothProfile.STATE_CONNECTING -> {
                     host = device
                     channelOpen = false
-                    _state.value = ConnectionState.Connecting(device.name ?: device.address)
+                    markConnecting(device)
                 }
 
                 BluetoothProfile.STATE_CONNECTED -> {
@@ -108,6 +122,7 @@ class HidDeviceManager(private val context: Context) {
                     protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE
                     reconnectAfterClose = null
                     rememberHost(device)
+                    clearConnectionAttempt()
                     _state.value = ConnectionState.Connected(device.name ?: device.address)
                     // If Windows rejects this first neutral report, sendNow changes
                     // the state to Error. Do not overwrite that failure below.
@@ -132,15 +147,16 @@ class HidDeviceManager(private val context: Context) {
                     val next = reconnectAfterClose
                     reconnectAfterClose = null
                     if (next != null && registered) {
-                        _state.value = ConnectionState.Connecting(next.name ?: next.address)
+                        markConnecting(next)
                         val accepted = try {
                             hid?.connect(next) == true
                         } catch (error: RuntimeException) {
                             Log.e(TAG, "Could not reconnect Bluetooth HID", error)
                             false
                         }
-                        if (!accepted) _state.value = ConnectionState.Error("Windows did not reopen the HID input channel")
+                        if (!accepted) scheduleReconnectFallback(next)
                     } else {
+                        clearConnectionAttempt()
                         _state.value = if (registered) ConnectionState.Ready else ConnectionState.Error("Bluetooth HID disconnected")
                     }
                 }
@@ -175,6 +191,7 @@ class HidDeviceManager(private val context: Context) {
                 buttons = 0
                 cancelAllClickReleases()
                 clearPendingKeyStrokes()
+                clearConnectionAttempt()
                 _state.value = ConnectionState.Ready
             }
         }
@@ -198,6 +215,7 @@ class HidDeviceManager(private val context: Context) {
             buttons = 0
             cancelAllClickReleases()
             clearPendingKeyStrokes()
+            clearConnectionAttempt()
             _state.value = ConnectionState.Error("Bluetooth HID service stopped")
         }
     }
@@ -448,9 +466,7 @@ class HidDeviceManager(private val context: Context) {
             return false
         }
         if (existingState == BluetoothProfile.STATE_CONNECTED) return restartVirtualCable(service, device)
-        host = device
-        channelOpen = false
-        _state.value = ConnectionState.Connecting(device.name ?: device.address)
+        markConnecting(device, freshRequest = true)
         val accepted = try {
             service.connect(device)
         } catch (error: SecurityException) {
@@ -460,7 +476,7 @@ class HidDeviceManager(private val context: Context) {
             reportBluetoothFailure("This phone could not start the HID connection", error)
             return false
         }
-        if (!accepted) _state.value = ConnectionState.Error("Windows rejected the HID connection request")
+        if (!accepted) scheduleReconnectFallback(device)
         return accepted
     }
 
@@ -478,10 +494,8 @@ class HidDeviceManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun restartVirtualCable(service: BluetoothHidDevice, device: BluetoothDevice): Boolean {
         releaseAll()
-        host = device
-        channelOpen = false
+        markConnecting(device, freshRequest = true)
         reconnectAfterClose = device
-        _state.value = ConnectionState.Connecting(device.name ?: device.address)
         val accepted = try {
             service.disconnect(device)
         } catch (error: SecurityException) {
@@ -493,11 +507,85 @@ class HidDeviceManager(private val context: Context) {
             reportBluetoothFailure("This phone could not restart the HID connection", error)
             return false
         }
-        if (!accepted) {
-            reconnectAfterClose = null
-            _state.value = ConnectionState.Error("Could not close the stale HID input channel")
-        }
+        // Android can report a successful close without delivering its close
+        // callback after Windows sleep. The fallback is harmless when that
+        // callback arrives, and avoids another long Connecting wait when it does not.
+        if (!accepted) Log.w(TAG, "HID cable close was not accepted for ${device.address}")
+        scheduleReconnectFallback(device)
         return accepted
+    }
+
+    private fun markConnecting(device: BluetoothDevice, freshRequest: Boolean = false) {
+        if (freshRequest || connectingDevice?.address != device.address) recoveryAttempted = false
+        connectingDevice = device
+        host = device
+        channelOpen = false
+        _state.value = ConnectionState.Connecting(device.name ?: device.address)
+        reportHandler.removeCallbacks(connectionTimeoutRunnable)
+        reportHandler.postDelayed(connectionTimeoutRunnable, HID_CHANNEL_TIMEOUT_MS)
+    }
+
+    private fun clearConnectionAttempt() {
+        connectingDevice = null
+        recoveryAttempted = false
+        reportHandler.removeCallbacks(connectionTimeoutRunnable)
+        reportHandler.removeCallbacks(reconnectFallbackRunnable)
+    }
+
+    /** Resets one stale HID virtual cable instead of leaving CONNECTING forever after a PC resume. */
+    @SuppressLint("MissingPermission")
+    private fun recoverStuckConnection() {
+        val device = connectingDevice ?: return
+        if (channelOpen || host?.address != device.address || _state.value !is ConnectionState.Connecting) return
+        if (recoveryAttempted) {
+            reconnectAfterClose = null
+            clearConnectionAttempt()
+            _state.value = ConnectionState.Error("Mouse input did not reopen. Tap Reconnect mouse input.")
+            return
+        }
+        recoveryAttempted = true
+        reconnectAfterClose = device
+        val disconnected = try {
+            hid?.disconnect(device) == true
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            false
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "Could not close stale Bluetooth HID connection", error)
+            false
+        }
+        Log.i(TAG, "HID connection timed out for ${device.address}; resetting virtual cable (disconnect=$disconnected)")
+        scheduleReconnectFallback(device)
+    }
+
+    private fun scheduleReconnectFallback(device: BluetoothDevice) {
+        reconnectAfterClose = device
+        reportHandler.removeCallbacks(reconnectFallbackRunnable)
+        reportHandler.postDelayed(reconnectFallbackRunnable, HID_RECONNECT_DELAY_MS)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun retryConnectionAfterClose() {
+        val device = reconnectAfterClose ?: return
+        if (channelOpen) return
+        reconnectAfterClose = null
+        val service = hid
+        if (!registered || service == null) {
+            clearConnectionAttempt()
+            _state.value = ConnectionState.Error("DeskPilot Bluetooth is not ready")
+            return
+        }
+        markConnecting(device)
+        val accepted = try {
+            service.connect(device)
+        } catch (error: SecurityException) {
+            reportBluetoothFailure("Nearby devices permission is required", error)
+            false
+        } catch (error: RuntimeException) {
+            reportBluetoothFailure("This phone could not reopen the HID mouse input", error)
+            false
+        }
+        if (!accepted) Log.w(TAG, "HID reconnect request was not accepted for ${device.address}")
     }
 
     @SuppressLint("MissingPermission")
@@ -551,6 +639,8 @@ class HidDeviceManager(private val context: Context) {
         const val CLICK_HOLD_MS = 28L
         const val KEY_HOLD_MS = 12L
         const val KEY_GAP_MS = 8L
+        const val HID_CHANNEL_TIMEOUT_MS = 8_000L
+        const val HID_RECONNECT_DELAY_MS = 650L
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
         const val PROFILE_REFRESH_DELAY_MS = 350L
     }
