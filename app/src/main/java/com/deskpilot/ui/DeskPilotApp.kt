@@ -366,7 +366,12 @@ private fun remoteInputValue(
                 // key available. Its newline is sent as HID Shift+Enter.
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.None)
             )
-            IconButton(onClick = model::submitFromPhone) {
+            IconButton(onClick = {
+                model.submitFromPhone()
+                // This buffer mirrors only the current phone typing session.
+                // Start a clean session after the user deliberately submits.
+                input = remoteInputValue()
+            }) {
                 Icon(Icons.Filled.KeyboardReturn, contentDescription = "Send Enter to Windows")
             }
             IconButton(onClick = { keyboard?.hide(); dismiss() }) {
