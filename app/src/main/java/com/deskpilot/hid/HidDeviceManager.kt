@@ -94,6 +94,14 @@ class HidDeviceManager(private val context: Context) {
     private var reportWindowStartedAt = 0L
     private var reportsPerSecond = 0
     private var failedReports = 0
+    // A phone can deliver touch history faster than a Bluetooth HID mouse is
+    // polled by Windows. Sending every historical sample makes Android queue
+    // reports and leaves the cursor visibly behind the finger. Merge only
+    // relative pointer motion and emit it at a stable mouse-rate instead.
+    private var pendingMotionX = 0
+    private var pendingMotionY = 0
+    private var motionFlushScheduled = false
+    private var lastMotionReportAt = 0L
     private val executor: Executor = context.mainExecutor
     private val keyStrokeReleaseRunnable = Runnable { releaseCurrentKeyStroke() }
     private val keyStrokeNextRunnable = Runnable {
@@ -106,6 +114,10 @@ class HidDeviceManager(private val context: Context) {
         consumerInFlight = false
         activeConsumerStroke = null
         sendNextConsumerControl()
+    }
+    private val motionFlushRunnable = Runnable {
+        motionFlushScheduled = false
+        flushPendingMotion()
     }
     private val connectionTimeoutRunnable = Runnable { recoverStuckConnection() }
     private val reconnectFallbackRunnable = Runnable { retryConnectionAfterClose() }
@@ -338,12 +350,21 @@ class HidDeviceManager(private val context: Context) {
         if (!accepted) _state.value = ConnectionState.Error("Could not register the Bluetooth HID device")
     }
 
-    fun move(dx: Int, dy: Int) = sendMouse(dx, dy, 0, 0)
+    fun move(dx: Int, dy: Int) {
+        if (dx == 0 && dy == 0) return
+        pendingMotionX += dx
+        pendingMotionY += dy
+        schedulePendingMotion()
+    }
     fun scroll(vertical: Int, horizontal: Int) {
-        if (vertical != 0 || horizontal != 0) sendMouse(0, 0, vertical, if (advancedProfile) horizontal else 0)
+        if (vertical != 0 || horizontal != 0) {
+            flushPendingMotion()
+            sendMouse(0, 0, vertical, if (advancedProfile) horizontal else 0)
+        }
     }
 
     fun setButton(button: Int, down: Boolean) {
+        flushPendingMotion()
         cancelPendingClickRelease(button)
         buttons = if (down) buttons or button else buttons and button.inv()
         sendMouse(0, 0, 0, 0)
@@ -351,6 +372,7 @@ class HidDeviceManager(private val context: Context) {
     }
 
     fun click(button: Int) {
+        flushPendingMotion()
         cancelPendingClickRelease(button)
         buttons = buttons or button
         sendMouse(0, 0, 0, 0)
@@ -364,6 +386,7 @@ class HidDeviceManager(private val context: Context) {
     }
 
     fun releaseAll() {
+        flushPendingMotion()
         cancelAllClickReleases()
         clearPendingKeyStrokes(releaseActiveKey = true)
         clearPendingConsumerControls(releaseActiveControl = true)
@@ -425,12 +448,59 @@ class HidDeviceManager(private val context: Context) {
         publishDiagnostics()
     }
 
-    fun discardPendingMotion() = cancelPendingZoom()
+    /** Finishes a gesture without leaving its final pointer movement behind. */
+    fun discardPendingMotion() {
+        flushPendingMotion()
+        cancelPendingZoom()
+    }
 
     private fun sendMouse(dx: Int, dy: Int, wheel: Int, pan: Int) {
         val device = host ?: return
         if (!channelOpen) return
         sendNow(device, mouseReportId(), currentReport(dx, dy, wheel, pan))
+    }
+
+    private fun schedulePendingMotion() {
+        if (pendingMotionX == 0 && pendingMotionY == 0) return
+        val now = SystemClock.uptimeMillis()
+        val wait = (MOUSE_REPORT_INTERVAL_MS - (now - lastMotionReportAt)).coerceAtLeast(0L)
+        if (wait == 0L) {
+            reportHandler.removeCallbacks(motionFlushRunnable)
+            motionFlushScheduled = false
+            flushPendingMotion()
+        } else if (!motionFlushScheduled) {
+            motionFlushScheduled = true
+            reportHandler.postDelayed(motionFlushRunnable, wait)
+        }
+    }
+
+    /** Sends at most one bounded relative report, retaining any remaining distance. */
+    private fun flushPendingMotion() {
+        reportHandler.removeCallbacks(motionFlushRunnable)
+        motionFlushScheduled = false
+        if (pendingMotionX == 0 && pendingMotionY == 0) return
+        val device = host
+        if (device == null || !channelOpen) {
+            clearPendingMotion()
+            return
+        }
+        val dx = pendingMotionX.coerceIn(-127, 127)
+        val dy = pendingMotionY.coerceIn(-127, 127)
+        pendingMotionX -= dx
+        pendingMotionY -= dy
+        if (sendNow(device, mouseReportId(), currentReport(dx, dy, 0, 0))) {
+            lastMotionReportAt = SystemClock.uptimeMillis()
+            if (pendingMotionX != 0 || pendingMotionY != 0) schedulePendingMotion()
+        } else {
+            clearPendingMotion()
+        }
+    }
+
+    private fun clearPendingMotion() {
+        pendingMotionX = 0
+        pendingMotionY = 0
+        motionFlushScheduled = false
+        reportHandler.removeCallbacks(motionFlushRunnable)
     }
 
     private fun mouseReportId() = if (advancedProfile && protocol != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
@@ -527,6 +597,7 @@ class HidDeviceManager(private val context: Context) {
     }
 
     private fun resetButtonsAndSendNeutral() {
+        clearPendingMotion()
         cancelAllClickReleases()
         buttons = 0
         sendMouse(0, 0, 0, 0)
@@ -542,6 +613,7 @@ class HidDeviceManager(private val context: Context) {
         }
         recordReport(accepted)
         if (accepted) return true
+        clearPendingMotion()
         channelOpen = false
         _state.value = ConnectionState.Error("Windows is not accepting DeskPilot mouse reports")
         return false
@@ -818,5 +890,6 @@ class HidDeviceManager(private val context: Context) {
         const val PROFILE_CONNECTION_TIMEOUT_MS = 10_000L
         const val PROFILE_REFRESH_DELAY_MS = 350L
         const val REPORT_RATE_WINDOW_MS = 1_000L
+        const val MOUSE_REPORT_INTERVAL_MS = 8L
     }
 }
